@@ -145,9 +145,10 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         }
 
         // PS + touchpad_button → toggle touchpad (runtime only, no flash write)
+        // Only active when enable_touchpad == 1; if disabled, touchpad is always on.
         static bool touchpad_toggle_held = false;
         const uint8_t tp_btn = get_config().touchpad_button;
-        if (ps && shortcut_btn_pressed(data, tp_btn)) {
+        if (get_config().enable_touchpad && ps && shortcut_btn_pressed(data, tp_btn)) {
             shortcut_btn_suppress(data, tp_btn);
             suppress_ps = true;
             if (!touchpad_toggle_held) {
@@ -347,7 +348,9 @@ int main() {
     critical_section_init(&report_cs);
 
     config_load();
-    touchpad_runtime_enabled = get_config().enable_touchpad != 0;
+    // Touchpad always starts active; enable_touchpad controls whether the PS+button
+    // shortcut is available (1 = shortcut enabled, 0 = touchpad always on, no toggle).
+    touchpad_runtime_enabled = true;
 
     wake_init();
 
