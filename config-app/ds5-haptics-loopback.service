@@ -25,21 +25,38 @@ Type=simple
 # If the sink never shows up (dongle truly absent) the guard fails and the
 # service does not start — no feedback loop.
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do pactl list short sinks | grep -q "\\bds5_dongle_sink\\b" && exit 0; sleep 0.5; done; exit 1'
-# Two passive loopbacks: one from the Arctis headset (ASM sonar chain), one
-# from HDMI. Each activates only when its sink plays audio; PipeWire mixes
-# both into the dongle's AUX0/AUX1. node.dont-reconnect=true on each playback
-# side ensures no fallback to speakers if the dongle disappears at runtime.
+# Two passive loopbacks feed the dongle's AUX0/AUX1, both following ASM's Sonar
+# channels so only the wanted audio triggers haptics:
+#   * Game source:   the Arctis_Game sink (game channel). Media and Chat are
+#                    never captured, so they don't produce vibrations.
+#   * Output source: the Sonar "output" channel (effect_input.sonar-output-eq),
+#                    i.e. ASM's external output (HDMI/TV) destination.
+# Both are resolved at start time. When ASM/Sonar is NOT installed neither sink
+# exists, so we fall back to a single capture of the system default sink and
+# vibrate on everything — haptics keep working with no dependency on ASM.
+# Each loopback activates only when its sink plays audio. node.dont-reconnect=true
+# on each playback side ensures no fallback to speakers if the dongle disappears
+# at runtime. ($$ is systemd's escape for a literal $ passed to the shell.)
 ExecStart=/bin/sh -c '\
+  if pactl list short sinks | grep -q "\\bArctis_Game\\b"; then \
+    GAME_SRC=Arctis_Game; \
+    OUT_SRC=effect_input.sonar-output-eq; \
+  else \
+    GAME_SRC=$$(pactl get-default-sink); \
+    OUT_SRC=; \
+  fi; \
   /usr/bin/pw-loopback -c 2 \
-    --capture-props="node.name=ds5_haptics_capture_arctis media.class=Stream/Input/Audio stream.capture.sink=true target.object=alsa_output.usb-SteelSeries_Arctis_Nova_Pro_Wireless-00.analog-stereo audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
+    --capture-props="node.name=ds5_haptics_capture_game media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$GAME_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
     --playback=ds5_dongle_sink \
-    --playback-props="node.name=ds5_haptics_playback_arctis node.dont-reconnect=true audio.position=[AUX0,AUX1] stream.dont-remix=true node.passive=true" \
+    --playback-props="node.name=ds5_haptics_playback_game node.dont-reconnect=true audio.position=[AUX0,AUX1] stream.dont-remix=true node.passive=true" \
   & \
-  /usr/bin/pw-loopback -c 2 \
-    --capture-props="node.name=ds5_haptics_capture_hdmi media.class=Stream/Input/Audio stream.capture.sink=true target.object=alsa_output.pci-0000_09_00.1.hdmi-surround audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
-    --playback=ds5_dongle_sink \
-    --playback-props="node.name=ds5_haptics_playback_hdmi node.dont-reconnect=true audio.position=[AUX0,AUX1] stream.dont-remix=true node.passive=true" \
-  & \
+  if [ -n "$$OUT_SRC" ] && pactl list short sinks | grep -qF "$$OUT_SRC"; then \
+    /usr/bin/pw-loopback -c 2 \
+      --capture-props="node.name=ds5_haptics_capture_output media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$OUT_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
+      --playback=ds5_dongle_sink \
+      --playback-props="node.name=ds5_haptics_playback_output node.dont-reconnect=true audio.position=[AUX0,AUX1] stream.dont-remix=true node.passive=true" \
+    & \
+  fi; \
   wait'
 # Restart on any unexpected exit (pw-loopback should run as long as the dongle
 # is present). systemd does NOT restart after a commanded stop, so the udev

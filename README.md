@@ -381,7 +381,7 @@ systemctl --user is-active ds5-haptics-loopback.service
 pw-link -lo | grep -A2 "ds5_haptics_playback"
 ```
 
-> ✅ **How to know it worked:** the first command prints `active`, and the second shows `ds5_dongle_sink` as the target for `ds5_haptics_playback_arctis` and `ds5_haptics_playback_hdmi`. Now start a game, make noise, and feel the controller vibrate.
+> ✅ **How to know it worked:** the first command prints `active`, and the second shows `ds5_dongle_sink` as the target for `ds5_haptics_playback_game` (and `ds5_haptics_playback_output` when ASM is installed). Now start a game, make noise, and feel the controller vibrate.
 
 > ⚠️ **If the loopback targets your speakers instead of the Pico** — check that the WirePlumber rule from step 1 is applied (`pw-dump | grep ds5_dongle_sink`). If empty, the rule file might have a typo.
 
