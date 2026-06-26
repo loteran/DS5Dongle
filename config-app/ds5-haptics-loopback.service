@@ -5,9 +5,12 @@ After=pipewire.service wireplumber.service pipewire-pulse.service
 Wants=pipewire.service
 # This unit is started on demand by udev (ENV{SYSTEMD_USER_WANTS}) when the
 # DualSense dongle is plugged in, and stopped by udev when it is unplugged.
-# It must NOT be enabled at boot: running it without the dongle present would
-# make the playback stream fall back to the speakers and create an audio
-# feedback loop. The ExecStartPre guard below is a second line of defense.
+# It is ALSO enabled at boot (see [Install]) to cover the cold-plug case: when
+# the dongle is already connected at boot, udev's ADD event does not fire, so
+# without this the service would never start and haptics stay dead until a
+# manual replug. Enabling it is safe because the ExecStartPre guard below
+# refuses to start (exit 1) when ds5_dongle_sink is absent — so a missing
+# dongle can never make the playback fall back to the speakers / feedback.
 # Bound automatic restarts so a permanently broken state can't spin forever.
 StartLimitIntervalSec=300
 StartLimitBurst=20
@@ -43,3 +46,6 @@ ExecStart=/bin/sh -c '\
 # unplug handler still stops it cleanly with no feedback risk.
 Restart=always
 RestartSec=2
+
+[Install]
+WantedBy=default.target
