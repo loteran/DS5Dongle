@@ -78,14 +78,14 @@ endif ()
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
 
-project(ds5-bridge C CXX ASM)
+project(DS5-dongle C CXX ASM)
 
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(ds5-bridge
+add_executable(DS5-dongle
         src/usb_descriptors.cpp
         src/main.cpp
         src/usb.cpp
@@ -97,10 +97,10 @@ add_executable(ds5-bridge
 )
 
 if (ENABLE_BATT_LED)
-        target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
+        target_sources(DS5-dongle PRIVATE src/battery_led.cpp)
 endif ()
 if (ENABLE_BATT_COLOR)
-        target_sources(ds5-bridge PRIVATE src/battery_color.cpp)
+        target_sources(DS5-dongle PRIVATE src/battery_color.cpp)
 endif ()
 
 # Cockos WDLResampler
@@ -116,12 +116,12 @@ target_include_directories(wdl_resampler PUBLIC
 add_subdirectory(lib/opus)
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
-target_compile_options(ds5-bridge PRIVATE -fsigned-char)
+target_compile_options(DS5-dongle PRIVATE -fsigned-char)
 
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
-target_compile_definitions(ds5-bridge PRIVATE
+target_compile_definitions(DS5-dongle PRIVATE
         CYW43_LWIP=0
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
         PICO_FLASH_ASSUME_CORE1_SAFE=1
@@ -144,31 +144,31 @@ target_compile_definitions(ds5-bridge PRIVATE
 # enumerates with 0xC0, identical to pre-wake firmware.
 option(ENABLE_WAKE_HID "Wake the Windows host on PS-button press" OFF)
 if(ENABLE_WAKE_HID)
-    target_compile_definitions(ds5-bridge PRIVATE
+    target_compile_definitions(DS5-dongle PRIVATE
             ENABLE_WAKE_HID
     )
-    target_sources(ds5-bridge PRIVATE
+    target_sources(DS5-dongle PRIVATE
             src/wake.cpp
     )
 endif()
 
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)
 if(WAKE_DEBUG)
-    target_compile_definitions(ds5-bridge PRIVATE
+    target_compile_definitions(DS5-dongle PRIVATE
             WAKE_DEBUG
     )
 endif()
 set(VERSION "dev" CACHE STRING "Program version string")
 
-pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "${VERSION}")
+pico_set_program_name(DS5-dongle "DS5-dongle")
+pico_set_program_version(DS5-dongle "${VERSION}")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(ds5-bridge 1)
-pico_enable_stdio_usb(ds5-bridge ${ENABLE_SERIAL_VALUE})
+pico_enable_stdio_uart(DS5-dongle 1)
+pico_enable_stdio_usb(DS5-dongle ${ENABLE_SERIAL_VALUE})
 
 # Add the standard include files to the build
-#target_include_directories(ds5-bridge PRIVATE
+#target_include_directories(DS5-dongle PRIVATE
 #        ${CMAKE_CURRENT_LIST_DIR}
 #)
 
@@ -177,7 +177,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 
 # Add any user requested libraries
-target_link_libraries(ds5-bridge
+target_link_libraries(DS5-dongle
         pico_stdlib
         pico_multicore
         hardware_watchdog
@@ -193,5 +193,5 @@ target_link_libraries(ds5-bridge
         opus
 )
 
-pico_add_extra_outputs(ds5-bridge)
+pico_add_extra_outputs(DS5-dongle)
 

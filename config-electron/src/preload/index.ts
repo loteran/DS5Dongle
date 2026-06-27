@@ -53,5 +53,11 @@ contextBridge.exposeInMainWorld('ds5', {
     ipcRenderer.on(IPC_EVENTS.LOOPBACK_STATUS, listener);
     return () => ipcRenderer.removeListener(IPC_EVENTS.LOOPBACK_STATUS, listener);
   },
+
+  // Loopback source selection (Windows-only)
+  listAudioSources: () => ipcRenderer.invoke(IPC.LOOPBACK_LIST_DEVICES),
+  getAudioSource:   () => ipcRenderer.invoke(IPC.LOOPBACK_GET_SOURCE),
+  setAudioSource:   (name: string | null) => ipcRenderer.invoke(IPC.LOOPBACK_SET_SOURCE, name),
+
   platform: process.platform,
 });

@@ -14,11 +14,20 @@ import { EventEmitter } from 'events';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { app } from 'electron';
+import { loadSettings, saveSettings } from '../store/settings';
 
 export interface LoopbackStatus {
   running: boolean;
   deviceName?: string;
   error?: string;
+}
+
+export interface AudioDevice {
+  id: number;
+  name: string;
+  outputChannels: number;
+  inputChannels: number;
 }
 
 interface WorkerStatusEvent {
@@ -28,6 +37,15 @@ interface WorkerStatusEvent {
   error?: string;
 }
 
+interface WorkerDevicesEvent {
+  event: 'devices';
+  devices?: AudioDevice[];
+  defOutId?: number;
+  error?: string;
+}
+
+type WorkerEvent = WorkerStatusEvent | WorkerDevicesEvent;
+
 const KILL_GRACE_MS = 500;
 
 class LoopbackEngine extends EventEmitter {
@@ -36,16 +54,11 @@ class LoopbackEngine extends EventEmitter {
   private status: LoopbackStatus = { running: false };
   private stopping = false;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
+  private deviceResolvers: Array<(r: { devices: AudioDevice[]; defOutId: number }) => void> = [];
 
   start(): void {
     if (process.platform !== 'win32') return; // WASAPI loopback is Windows-only
     if (this.child) return;                    // already running
-
-    const nodeExe = this.findNodeExecutable();
-    if (!nodeExe) {
-      this.setStatus({ running: false, error: 'system Node.js executable not found in PATH' });
-      return;
-    }
 
     const workerPath = join(__dirname, 'loopback-worker.js');
     if (!existsSync(workerPath)) {
@@ -53,11 +66,34 @@ class LoopbackEngine extends EventEmitter {
       return;
     }
 
+    // Decide how to run the worker process.
+    // - Packaged: spawn Electron itself as a plain Node runtime (ELECTRON_RUN_AS_NODE).
+    //   This uses Electron's embedded Node, whose ABI matches the audify binary that
+    //   electron-builder rebuilds at package time (npmRebuild). No system Node.js
+    //   install is required, and Electron's asar-aware fs can read the worker script.
+    // - Dev: audify was built for the system Node that ran `npm install`, so spawn that.
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    let exe: string;
+    if (app.isPackaged) {
+      exe = process.execPath;
+      env.ELECTRON_RUN_AS_NODE = '1';
+      // Point the worker straight at the unpacked native module (see asarUnpack).
+      env.AUDIFY_PATH = join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'audify');
+    } else {
+      const nodeExe = this.findNodeExecutable();
+      if (!nodeExe) {
+        this.setStatus({ running: false, error: 'system Node.js executable not found in PATH (dev mode)' });
+        return;
+      }
+      exe = nodeExe;
+    }
+
     this.stopping = false;
     try {
-      this.child = spawn(nodeExe, [workerPath], {
+      this.child = spawn(exe, [workerPath], {
         stdio: ['pipe', 'pipe', 'inherit'], // inherit stderr → worker debug logs in our console
         windowsHide: true,
+        env,
       });
     } catch (err) {
       this.setStatus({ running: false, error: `failed to spawn loopback worker: ${String(err)}` });
@@ -80,8 +116,9 @@ class LoopbackEngine extends EventEmitter {
       if (this.status.running) this.setStatus({ running: false });
     });
 
-    // Kick off the loopback.
-    this.send({ cmd: 'start' });
+    // Kick off the loopback, forwarding any persisted source preference.
+    const source = loadSettings().loopbackSourceName ?? '';
+    this.send({ cmd: 'start', source });
   }
 
   stop(): void {
@@ -103,6 +140,41 @@ class LoopbackEngine extends EventEmitter {
 
   getStatus(): LoopbackStatus {
     return { ...this.status };
+  }
+
+  listDevices(): Promise<{ devices: AudioDevice[]; defOutId: number }> {
+    if (process.platform !== 'win32' || !this.child) {
+      return Promise.resolve({ devices: [], defOutId: -1 });
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const wrappedResolve = (r: { devices: AudioDevice[]; defOutId: number }) => {
+        if (!settled) { settled = true; resolve(r); }
+      };
+      const timer = setTimeout(() => {
+        const idx = this.deviceResolvers.indexOf(wrappedResolve);
+        if (idx !== -1) this.deviceResolvers.splice(idx, 1);
+        wrappedResolve({ devices: [], defOutId: -1 });
+      }, 2000);
+      this.deviceResolvers.push((r) => {
+        clearTimeout(timer);
+        wrappedResolve(r);
+      });
+      this.send({ cmd: 'list-devices' });
+    });
+  }
+
+  getSource(): string | null {
+    return loadSettings().loopbackSourceName ?? null;
+  }
+
+  setSource(name: string | null): void {
+    const s = loadSettings();
+    s.loopbackSourceName = name;
+    saveSettings(s);
+    if (this.child) {
+      this.send({ cmd: 'set-source', source: name ?? '' });
+    }
   }
 
   // ---- Private ---------------------------------------------------------------
@@ -127,9 +199,9 @@ class LoopbackEngine extends EventEmitter {
       const line = this.stdoutBuf.slice(0, nl).trim();
       this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
       if (!line) continue;
-      let msg: WorkerStatusEvent;
+      let msg: WorkerEvent;
       try {
-        msg = JSON.parse(line) as WorkerStatusEvent;
+        msg = JSON.parse(line) as WorkerEvent;
       } catch {
         continue; // ignore non-JSON noise
       }
@@ -139,6 +211,11 @@ class LoopbackEngine extends EventEmitter {
           deviceName: msg.deviceName,
           error: msg.error,
         });
+      } else if (msg.event === 'devices') {
+        const resolver = this.deviceResolvers.shift();
+        if (resolver) {
+          resolver({ devices: msg.devices ?? [], defOutId: msg.defOutId ?? -1 });
+        }
       }
     }
   }

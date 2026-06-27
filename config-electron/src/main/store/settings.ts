@@ -19,6 +19,8 @@ export interface AppSettings {
   telemetryLastSent?: string;
   // Fallback installation ID (random UUID) when machine-id is unavailable
   telemetryInstallId?: string;
+  // Explicit WASAPI loopback capture source by device name; null/undefined => follow Windows default output (Windows-only)
+  loopbackSourceName?: string | null;
 }
 
 // Called lazily so app.getPath() is only invoked after app.ready

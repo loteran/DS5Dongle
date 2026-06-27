@@ -8,6 +8,7 @@ files:
 asarUnpack:
   - node_modules/node-hid/**
   - node_modules/usb/**
+  - node_modules/audify/**
 npmRebuild: true
 compression: maximum
 electronLanguages:

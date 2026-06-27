@@ -3,7 +3,7 @@
 import type { DS5Config } from '../../shared/config';
 import type { DeviceStatus } from '../../shared/protocol';
 import type { PresetSummary } from '../../shared/presets';
-import type { DeviceChangedPayload, DeviceTelemetryPayload, LoopbackStatusPayload } from '../../shared/ipc';
+import type { AudioDevice, DeviceChangedPayload, DeviceTelemetryPayload, LoopbackStatusPayload } from '../../shared/ipc';
 
 declare global {
   interface Window {
@@ -35,6 +35,12 @@ declare global {
       onDeviceChanged:   (cb: (p: DeviceChangedPayload) => void) => () => void;
       onTelemetry:       (cb: (p: DeviceTelemetryPayload) => void) => () => void;
       onLoopbackStatus:  (cb: (p: LoopbackStatusPayload) => void) => () => void;
+
+      // Loopback source selection (Windows-only)
+      listAudioSources: () => Promise<{ devices: AudioDevice[]; defOutId: number }>;
+      getAudioSource:   () => Promise<string | null>;
+      setAudioSource:   (name: string | null) => Promise<void>;
+
       platform: string;
     };
   }

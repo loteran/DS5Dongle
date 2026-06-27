@@ -179,16 +179,16 @@ Before starting, make sure you have everything:
 ### Step 1 — Download the firmware
 
 1. Go to the **[Releases page](https://github.com/loteran/DS5Dongle/releases)**
-2. Under the latest release, download the file named **`ds5-bridge-X.X.X.uf2`**  
+2. Under the latest release, download the file named **`DS5-dongle-X.X.X.uf2`**  
    (ignore all the other files — you only need the `.uf2`)
 
 **Which UF2 to pick:**
 
 | Asset | When to use |
 | --- | --- |
-| `ds5-bridge-<version>.uf2` | **Default.** Recommended for everyone. |
-| `ds5-bridge-wake-<version>.uf2` | Only if you need the dongle to **wake a sleeping Windows host**. |
-| `ds5-bridge-debug-<version>.uf2` | Troubleshooting (USB-serial verbose logs). |
+| `DS5-dongle-<version>.uf2` | **Default.** Recommended for everyone. |
+| `DS5-dongle-wake-<version>.uf2` | Only if you need the dongle to **wake a sleeping Windows host**. |
+| `DS5-dongle-debug-<version>.uf2` | Troubleshooting (USB-serial verbose logs). |
 
 > ⚠️ The **wake** variant advertises USB `REMOTE_WAKEUP`. On Linux, a wake-capable
 > device is grabbed by Wine/Proton's libusb HID scanner, which can starve other
@@ -210,7 +210,7 @@ Before starting, make sure you have everything:
 4. Copy the firmware onto it:
 
 ```bash
-cp ds5-bridge-X.X.X.uf2 /run/media/$USER/RP2350/
+cp DS5-dongle-X.X.X.uf2 /run/media/$USER/RP2350/
 ```
 
 > 💡 Replace `X.X.X` with the actual version number you downloaded.
@@ -239,7 +239,7 @@ The Pico acts as a Bluetooth host — your DualSense connects to it wirelessly, 
 2. On the DualSense: hold **PS button + Create button** (small button top-left of the touchpad) for 5 seconds until the light bar flashes rapidly
 3. The Pico searches for a DualSense and pairs automatically — the DualSense light bar turns solid white when connected
 
-> ✅ **How to know it worked:** the DualSense light bar stops flashing and stays solid. Your PC should now see a **"DS5 Bridge"** gamepad in its device list (check Settings → Bluetooth & devices on Windows, or run `ls /dev/input/js*` on Linux).
+> ✅ **How to know it worked:** the DualSense light bar stops flashing and stays solid. Your PC should now see a **"DS5 Dongle"** gamepad in its device list (check Settings → Bluetooth & devices on Windows, or run `ls /dev/input/js*` on Linux).
 
 > 💡 **Next time:** just press the PS button normally. The DualSense reconnects to the Pico automatically (no need to re-pair).
 
@@ -391,7 +391,7 @@ By default, all system audio goes to the Pico. If you only want one game to driv
 
 1. Install `pavucontrol`: `sudo apt install pavucontrol` (Ubuntu) / `sudo pacman -S pavucontrol` (Arch)
 2. Open `pavucontrol` → **Playback** tab while the game is running
-3. Find the game's stream and change its output to **DS5 Bridge**
+3. Find the game's stream and change its output to **DS5 Dongle**
 
 Everything else (music, Discord, etc.) will only go to your headset/speakers.
 
@@ -682,10 +682,10 @@ git -C /tmp/pico-sdk/lib/tinyusb checkout --detach 0.20.0
 
 # Configure & build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_SDK_PATH=/tmp/pico-sdk
-ninja -C build ds5-bridge
+ninja -C build DS5-dongle
 
 # Output
-ls build/ds5-bridge.uf2
+ls build/DS5-dongle.uf2
 ```
 
 ---
