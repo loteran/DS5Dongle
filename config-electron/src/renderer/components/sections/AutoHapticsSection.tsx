@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { useConfigStore } from '../../state/configStore';
 import SelectRow from '../SelectRow';
 import SliderRow from '../SliderRow';
@@ -5,14 +6,46 @@ import ToggleRow from '../ToggleRow';
 import { AUTO_HAPTICS_LABELS } from '../../../shared/enums';
 import { useLoopbackStatus } from '../../hooks/useLoopback';
 import { ds5 } from '../../ipc/client';
+import type { AudioDevice } from '../../../shared/ipc';
 
 export default function AutoHapticsSection() {
   const { draft, updateField } = useConfigStore();
   const loopback = useLoopbackStatus();
+
+  // Windows-only: loopback source selection state
+  const isWindows = ds5.platform === 'win32';
+  const [outputDevices, setOutputDevices] = useState<AudioDevice[]>([]);
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isWindows) return;
+    let cancelled = false;
+    Promise.all([ds5.listAudioSources(), ds5.getAudioSource()]).then(([{ devices }, src]) => {
+      if (cancelled) return;
+      const filtered = devices.filter(
+        (d) => d.outputChannels > 0 && !d.name.toLowerCase().includes('dualsense')
+      );
+      setOutputDevices(filtered);
+      setSelectedSource(src);
+    }).catch(() => { /* ignore — worker may not be running yet */ });
+    return () => { cancelled = true; };
+  }, [isWindows]);
+
   if (!draft) return <></>;
 
   const active = draft.autoHapticsEnable !== 0;
-  const isWindows = ds5.platform === 'win32';
+
+  // Build options and compute selected index for the source picker
+  const sourceOptions: string[] = ['Default output (follow Windows)', ...outputDevices.map((d) => d.name)];
+  const selectedIdx = selectedSource == null
+    ? 0
+    : Math.max(0, outputDevices.findIndex((d) => d.name === selectedSource) + 1);
+
+  function handleSourceChange(i: number): void {
+    const name = i === 0 ? null : outputDevices[i - 1].name;
+    setSelectedSource(name);
+    ds5.setAudioSource(name);
+  }
 
   return (
     <div className="section-card">
@@ -54,6 +87,15 @@ export default function AutoHapticsSection() {
         disabled={draft.autoHapticsEnable !== 1}
         onChange={(v) => updateField('autoHapticsMuteMix', v)}
       />
+      {isWindows && (
+        <SelectRow
+          label="Haptics audio source"
+          description="Which playback device's audio is captured for haptics. Use this if Windows keeps switching your default to the DualSense."
+          value={selectedIdx}
+          options={sourceOptions}
+          onChange={handleSourceChange}
+        />
+      )}
       {isWindows && <LoopbackBanner status={loopback} />}
     </div>
   );

@@ -89,6 +89,7 @@ let currentDefOutId   = null;
 let currentDeviceName = '';
 let pollTimer = null;
 let active = false;
+let preferredSourceName = null; // explicit capture source; null = follow Windows default
 
 /* ----------------------------------------------------------------------------
  * IPC helpers
@@ -187,7 +188,7 @@ function openInput(defOut) {
     );
     rt.start();
     rtIn = rt;
-    log('capturing default output:', defOut.name);
+    log('capturing source:', defOut.name);
     emit({ event: 'status', running: true, deviceName: defOut.name });
   } catch (err) {
     log('failed to open input stream:', String(err));
@@ -231,14 +232,26 @@ function poll() {
       if (!rtOut) return;
     }
 
-    if (defOutId === currentDefOutId) return;
-    const defOut = devices.find((d) => d.id === defOutId);
-    if (!defOut) return;
-    if (dongle && defOut.id === dongle.id) {
-      log('default output is the dongle — skipping to avoid feedback loop');
+    // Determine the desired capture source: use preferred name if set, else fall back to Windows default
+    let src = null;
+    if (preferredSourceName) {
+      src = devices.find((d) => d.outputChannels > 0 && d.name === preferredSourceName);
+    }
+    if (!src) {
+      src = devices.find((d) => d.id === defOutId); // fall back to Windows default output
+    }
+    if (!src) return;
+
+    // Feedback guard: refuse to capture the dongle into itself
+    if (dongle && src.id === dongle.id) {
+      log('source is the dongle — skipping to avoid feedback loop');
+      if (rtIn) closeInput();
       return;
     }
-    openInput(defOut);
+
+    // Only reopen when the chosen source changes
+    if (src.id === currentDefOutId) return;
+    openInput(src);
   } catch (err) {
     log('poll error:', String(err));
   }
@@ -248,7 +261,10 @@ function poll() {
  * Commands
  * ------------------------------------------------------------------------- */
 
-function startLoopback() {
+function startLoopback(msg) {
+  if (msg && typeof msg.source === 'string') {
+    preferredSourceName = msg.source || null;
+  }
   if (active) return;
   if (!audify) {
     emit({ event: 'status', running: false, error: 'audify not available' });
@@ -305,8 +321,14 @@ process.stdin.on('data', (chunk) => {
       log('invalid command JSON:', line);
       continue;
     }
-    if (msg && msg.cmd === 'start') startLoopback();
+    if (msg && msg.cmd === 'start') startLoopback(msg);
     else if (msg && msg.cmd === 'stop') stopLoopback();
+    else if (msg && msg.cmd === 'set-source') {
+      preferredSourceName = (msg.source || null);
+      // Force immediate re-evaluation on the new source
+      currentDefOutId = null;
+      poll();
+    }
     else if (msg && msg.cmd === 'list-devices') {
       try {
         const { devices, defOutId } = enumerate();
