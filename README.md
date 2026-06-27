@@ -239,7 +239,7 @@ The Pico acts as a Bluetooth host — your DualSense connects to it wirelessly, 
 2. On the DualSense: hold **PS button + Create button** (small button top-left of the touchpad) for 5 seconds until the light bar flashes rapidly
 3. The Pico searches for a DualSense and pairs automatically — the DualSense light bar turns solid white when connected
 
-> ✅ **How to know it worked:** the DualSense light bar stops flashing and stays solid. Your PC should now see a **"DS5 Bridge"** gamepad in its device list (check Settings → Bluetooth & devices on Windows, or run `ls /dev/input/js*` on Linux).
+> ✅ **How to know it worked:** the DualSense light bar stops flashing and stays solid. Your PC should now see a **"DS5 Dongle"** gamepad in its device list (check Settings → Bluetooth & devices on Windows, or run `ls /dev/input/js*` on Linux).
 
 > 💡 **Next time:** just press the PS button normally. The DualSense reconnects to the Pico automatically (no need to re-pair).
 
@@ -391,7 +391,7 @@ By default, all system audio goes to the Pico. If you only want one game to driv
 
 1. Install `pavucontrol`: `sudo apt install pavucontrol` (Ubuntu) / `sudo pacman -S pavucontrol` (Arch)
 2. Open `pavucontrol` → **Playback** tab while the game is running
-3. Find the game's stream and change its output to **DS5 Bridge**
+3. Find the game's stream and change its output to **DS5 Dongle**
 
 Everything else (music, Discord, etc.) will only go to your headset/speakers.
 
