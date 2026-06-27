@@ -93,6 +93,11 @@ export function registerHandlers(): void {
   // Telemetry consent — read/write from the renderer settings UI
   ipcMain.handle(IPC.TELEMETRY_GET_CONSENT, () => getConsent());
   ipcMain.handle(IPC.TELEMETRY_SET_CONSENT, (_e, value: boolean) => setConsent(value));
+
+  // Loopback source selection (Windows-only; safe to register on all platforms)
+  ipcMain.handle(IPC.LOOPBACK_LIST_DEVICES, () => loopbackEngine.listDevices());
+  ipcMain.handle(IPC.LOOPBACK_GET_SOURCE, () => loopbackEngine.getSource());
+  ipcMain.handle(IPC.LOOPBACK_SET_SOURCE, (_e, name: string | null) => loopbackEngine.setSource(name));
 }
 
 // --- Telemetry push — 30 s interval, mirrors Python QTimer ---
