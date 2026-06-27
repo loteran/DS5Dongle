@@ -14,6 +14,7 @@ import { EventEmitter } from 'events';
 import { spawn, execSync, type ChildProcess } from 'child_process';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { app } from 'electron';
 
 export interface LoopbackStatus {
   running: boolean;
@@ -41,23 +42,40 @@ class LoopbackEngine extends EventEmitter {
     if (process.platform !== 'win32') return; // WASAPI loopback is Windows-only
     if (this.child) return;                    // already running
 
-    const nodeExe = this.findNodeExecutable();
-    if (!nodeExe) {
-      this.setStatus({ running: false, error: 'system Node.js executable not found in PATH' });
-      return;
-    }
-
     const workerPath = join(__dirname, 'loopback-worker.js');
     if (!existsSync(workerPath)) {
       this.setStatus({ running: false, error: `loopback worker not found: ${workerPath}` });
       return;
     }
 
+    // Decide how to run the worker process.
+    // - Packaged: spawn Electron itself as a plain Node runtime (ELECTRON_RUN_AS_NODE).
+    //   This uses Electron's embedded Node, whose ABI matches the audify binary that
+    //   electron-builder rebuilds at package time (npmRebuild). No system Node.js
+    //   install is required, and Electron's asar-aware fs can read the worker script.
+    // - Dev: audify was built for the system Node that ran `npm install`, so spawn that.
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    let exe: string;
+    if (app.isPackaged) {
+      exe = process.execPath;
+      env.ELECTRON_RUN_AS_NODE = '1';
+      // Point the worker straight at the unpacked native module (see asarUnpack).
+      env.AUDIFY_PATH = join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'audify');
+    } else {
+      const nodeExe = this.findNodeExecutable();
+      if (!nodeExe) {
+        this.setStatus({ running: false, error: 'system Node.js executable not found in PATH (dev mode)' });
+        return;
+      }
+      exe = nodeExe;
+    }
+
     this.stopping = false;
     try {
-      this.child = spawn(nodeExe, [workerPath], {
+      this.child = spawn(exe, [workerPath], {
         stdio: ['pipe', 'pipe', 'inherit'], // inherit stderr → worker debug logs in our console
         windowsHide: true,
+        env,
       });
     } catch (err) {
       this.setStatus({ running: false, error: `failed to spawn loopback worker: ${String(err)}` });

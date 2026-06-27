@@ -55,6 +55,11 @@ ok "System files installed."
 # exist when the loopback service's ExecStartPre runs, causing a timeout.
 info "Reloading systemd user units + WirePlumber…"
 systemctl --user daemon-reload
+# Enable at boot so the cold-plug case is covered (dongle already connected at
+# boot → udev's ADD event never fires). The service's ExecStartPre guard makes
+# this safe: it refuses to start when ds5_dongle_sink is absent, so an unplugged
+# dongle can't cause a speaker feedback loop.
+systemctl --user enable ds5-haptics-loopback.service 2>/dev/null || true
 systemctl --user restart wireplumber
 
 # Give WirePlumber a moment to settle before firing udev events.

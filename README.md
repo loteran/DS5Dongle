@@ -381,7 +381,7 @@ systemctl --user is-active ds5-haptics-loopback.service
 pw-link -lo | grep -A2 "ds5_haptics_playback"
 ```
 
-> ✅ **How to know it worked:** the first command prints `active`, and the second shows `ds5_dongle_sink` as the target for `ds5_haptics_playback_arctis` and `ds5_haptics_playback_hdmi`. Now start a game, make noise, and feel the controller vibrate.
+> ✅ **How to know it worked:** the first command prints `active`, and the second shows `ds5_dongle_sink` as the target for `ds5_haptics_playback_game` (and `ds5_haptics_playback_output` when ASM is installed). Now start a game, make noise, and feel the controller vibrate.
 
 > ⚠️ **If the loopback targets your speakers instead of the Pico** — check that the WirePlumber rule from step 1 is applied (`pw-dump | grep ds5_dongle_sink`). If empty, the rule file might have a typo.
 
@@ -620,12 +620,20 @@ if it's disabled, the game often sends no rumble to the controller at all. Enabl
 - Steam → right-click the game → **Properties → Controller → Enable Steam Input**
 
 With Steam Input on, the game may see the controller twice (the Steam virtual pad **and** the raw
-DualSense), which causes **double input**. Hide the raw device from the game by adding this launch
-option (**Properties → General → Launch Options**):
+DualSense), which causes **double input**. This only happens **through the dongle**: the Pico
+exposes its own emulated DualSense HID, so the game sees both that and the Steam virtual pad. When
+the DualSense is plugged **directly into the PC over USB**, Proton hides the raw hidraw device by
+itself and there is no double input — the launch option below is **not needed** in that case.
+
+To fix it with the dongle, hide the raw device from the game by adding this launch option
+(**Properties → General → Launch Options**):
 
 ```
 SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x0ce6 %command%
 ```
+
+The PID matches the dongle's emulated mode: `0x0ce6` in DS5 mode, `0x0df2` in DSE Edge mode
+(`controller_mode`). In Edge mode use `SDL_GAMECONTROLLER_IGNORE_DEVICES=0x054c/0x0df2` instead.
 
 Steam Input still reads the DualSense and forwards rumble to the dongle, while the game now only
 sees the single virtual controller. If rumble works but you never had to do this before, a Proton
