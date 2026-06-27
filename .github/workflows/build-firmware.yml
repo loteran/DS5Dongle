@@ -137,9 +137,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             "${VERSION_ARG[@]}"
-          cmake --build build/standard --target ds5-bridge
+          cmake --build build/standard --target DS5-dongle
           mkdir -p artifacts
-          cp build/standard/ds5-bridge.uf2 "artifacts/ds5-bridge${{ inputs.asset_suffix }}.uf2"
+          cp build/standard/DS5-dongle.uf2 "artifacts/DS5-dongle${{ inputs.asset_suffix }}.uf2"
 
       - name: Build Debug firmware
         run: |
@@ -151,8 +151,8 @@ jobs:
             -DENABLE_SERIAL=ON \
             -DENABLE_VERBOSE=ON \
             "${VERSION_ARG[@]}"
-          cmake --build build/debug --target ds5-bridge
-          cp build/debug/ds5-bridge.uf2 "artifacts/ds5-bridge-debug${{ inputs.asset_suffix }}.uf2"
+          cmake --build build/debug --target DS5-dongle
+          cp build/debug/DS5-dongle.uf2 "artifacts/DS5-dongle-debug${{ inputs.asset_suffix }}.uf2"
 
       - name: Build wake firmware
         run: |
@@ -169,8 +169,8 @@ jobs:
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DENABLE_WAKE_HID=ON \
             "${VERSION_ARG[@]}"
-          cmake --build build/wake --target ds5-bridge
-          cp build/wake/ds5-bridge.uf2 "artifacts/ds5-bridge-wake${{ inputs.asset_suffix }}.uf2"
+          cmake --build build/wake --target DS5-dongle
+          cp build/wake/DS5-dongle.uf2 "artifacts/DS5-dongle-wake${{ inputs.asset_suffix }}.uf2"
 
       - name: Build Pico W firmware
         if: inputs.picow
@@ -182,8 +182,8 @@ jobs:
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DPICO_W_BUILD=ON \
             "${VERSION_ARG[@]}"
-          cmake --build build/picow --target ds5-bridge
-          cp build/picow/ds5-bridge.uf2 "artifacts/ds5-bridge-picow${{ inputs.asset_suffix }}.uf2"
+          cmake --build build/picow --target DS5-dongle
+          cp build/picow/DS5-dongle.uf2 "artifacts/DS5-dongle-picow${{ inputs.asset_suffix }}.uf2"
 
       - name: Build no-batt-led firmware (compile check only)
         if: inputs.no_batt_led_check
@@ -195,35 +195,35 @@ jobs:
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DENABLE_BATT_LED=OFF \
             "${VERSION_ARG[@]}"
-          cmake --build build/no-batt-led --target ds5-bridge
+          cmake --build build/no-batt-led --target DS5-dongle
 
       - name: Upload standard UF2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ds5-bridge${{ inputs.asset_suffix }}
-          path: artifacts/ds5-bridge${{ inputs.asset_suffix }}.uf2
+          name: DS5-dongle${{ inputs.asset_suffix }}
+          path: artifacts/DS5-dongle${{ inputs.asset_suffix }}.uf2
           if-no-files-found: error
 
       - name: Upload debug UF2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ds5-bridge-debug${{ inputs.asset_suffix }}
-          path: artifacts/ds5-bridge-debug${{ inputs.asset_suffix }}.uf2
+          name: DS5-dongle-debug${{ inputs.asset_suffix }}
+          path: artifacts/DS5-dongle-debug${{ inputs.asset_suffix }}.uf2
           if-no-files-found: error
 
       - name: Upload wake UF2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ds5-bridge-wake${{ inputs.asset_suffix }}
-          path: artifacts/ds5-bridge-wake${{ inputs.asset_suffix }}.uf2
+          name: DS5-dongle-wake${{ inputs.asset_suffix }}
+          path: artifacts/DS5-dongle-wake${{ inputs.asset_suffix }}.uf2
           if-no-files-found: error
 
       - name: Upload PicoW UF2 artifact
         if: inputs.picow
         uses: actions/upload-artifact@v4
         with:
-          name: ds5-bridge-picow${{ inputs.asset_suffix }}
-          path: artifacts/ds5-bridge-picow${{ inputs.asset_suffix }}.uf2
+          name: DS5-dongle-picow${{ inputs.asset_suffix }}
+          path: artifacts/DS5-dongle-picow${{ inputs.asset_suffix }}.uf2
           if-no-files-found: error
 
       - name: Attach UF2s to release
