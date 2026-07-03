@@ -31,17 +31,30 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do pactl list short sinks | grep 
 #                    never captured, so they don't produce vibrations.
 #   * Output source: the Sonar "output" channel (effect_input.sonar-output-eq),
 #                    i.e. ASM's external output (HDMI/TV) destination.
-# Both are resolved at start time. When ASM/Sonar is NOT installed neither sink
-# exists, so we fall back to a single capture of the system default sink and
-# vibrate on everything — haptics keep working with no dependency on ASM.
+# Both are resolved at start time. Because ASM creates its Sonar sinks
+# (Arctis_Game/Chat/Media) as its own pw-loopback nodes that may come up AFTER
+# this service — at boot/cold-plug ds5_dongle_sink can exist while Arctis_Game
+# does not yet — we POLL for Arctis_Game for up to ~15s before giving up. Without
+# this wait the check lost the race, GAME_SRC fell back to the default sink (the
+# physical headset = the full Game+Chat+Media mix) and the controller vibrated on
+# chat audio too. Only when Arctis_Game never appears (ASM/Sonar not installed) do
+# we fall back to a single capture of the system default sink and vibrate on
+# everything — haptics keep working with no dependency on ASM.
 # Each loopback activates only when its sink plays audio. node.dont-reconnect=true
 # on each playback side ensures no fallback to speakers if the dongle disappears
 # at runtime. ($$ is systemd's escape for a literal $ passed to the shell.)
 ExecStart=/bin/sh -c '\
-  if pactl list short sinks | grep -q "\\bArctis_Game\\b"; then \
-    GAME_SRC=Arctis_Game; \
-    OUT_SRC=effect_input.sonar-output-eq; \
-  else \
+  GAME_SRC=; \
+  OUT_SRC=; \
+  for i in $$(seq 1 30); do \
+    if pactl list short sinks | grep -q "\\bArctis_Game\\b"; then \
+      GAME_SRC=Arctis_Game; \
+      OUT_SRC=effect_input.sonar-output-eq; \
+      break; \
+    fi; \
+    sleep 0.5; \
+  done; \
+  if [ -z "$$GAME_SRC" ]; then \
     GAME_SRC=$$(pactl get-default-sink); \
     OUT_SRC=; \
   fi; \
