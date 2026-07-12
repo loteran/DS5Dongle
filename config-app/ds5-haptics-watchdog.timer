@@ -1,0 +1,15 @@
+[Unit]
+Description=Periodically self-heal DS5Dongle auto-haptics
+Documentation=https://github.com/loteran/DS5Dongle
+
+[Timer]
+# Run shortly after login, then every 30s. Cheap: the script exits immediately
+# when the dongle is unplugged or everything is already healthy. This is what
+# recovers haptics after the pad wakes from Bluetooth standby (which drops the
+# card to the "off" profile and destroys ds5_dongle_sink).
+OnStartupSec=20
+OnUnitActiveSec=30
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target

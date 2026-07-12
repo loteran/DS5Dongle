@@ -32,7 +32,8 @@ ok()   { printf '\033[32m[ok]\033[0m %s\n' "$*"; }
 # ── Sanity checks ─────────────────────────────────────────────────────────────
 [ "$(id -u)" -ne 0 ] || die "Run this as your normal user, not root — the WirePlumber/profile steps need your session. It calls sudo itself."
 
-for f in 51-ds5dongle.conf 70-ds5dongle.rules ds5dongle-loopback-stop ds5-haptics-loopback.service; do
+for f in 51-ds5dongle.conf 70-ds5dongle.rules ds5dongle-loopback-stop ds5-haptics-loopback.service \
+         ds5-haptics-ensure ds5-haptics-watchdog.service ds5-haptics-watchdog.timer; do
     [ -f "$SRC/$f" ] || die "Missing $SRC/$f — run this from a checked-out DS5Dongle tree."
 done
 
@@ -46,7 +47,10 @@ info "Installing system files (you may be prompted for your password)…"
 $SUDO install -Dm644 "$SRC/51-ds5dongle.conf"            /etc/wireplumber/wireplumber.conf.d/51-ds5dongle.conf
 $SUDO install -Dm644 "$SRC/70-ds5dongle.rules"           /etc/udev/rules.d/70-ds5dongle.rules
 $SUDO install -Dm755 "$SRC/ds5dongle-loopback-stop"      /usr/lib/ds5dongle/ds5dongle-loopback-stop
+$SUDO install -Dm755 "$SRC/ds5-haptics-ensure"           /usr/lib/ds5dongle/ds5-haptics-ensure
 $SUDO install -Dm644 "$SRC/ds5-haptics-loopback.service" /etc/systemd/user/ds5-haptics-loopback.service
+$SUDO install -Dm644 "$SRC/ds5-haptics-watchdog.service" /etc/systemd/user/ds5-haptics-watchdog.service
+$SUDO install -Dm644 "$SRC/ds5-haptics-watchdog.timer"   /etc/systemd/user/ds5-haptics-watchdog.timer
 ok "System files installed."
 
 # ── Reload systemd + WirePlumber FIRST so the rename rules are active ─────────
@@ -60,6 +64,10 @@ systemctl --user daemon-reload
 # this safe: it refuses to start when ds5_dongle_sink is absent, so an unplugged
 # dongle can't cause a speaker feedback loop.
 systemctl --user enable ds5-haptics-loopback.service 2>/dev/null || true
+# Self-heal timer: re-forces pro-audio + relinks the loopback whenever the pad
+# drops the card to "off" (Bluetooth standby) or the sink is recreated. Enable
+# --now so it starts protecting the current session immediately.
+systemctl --user enable --now ds5-haptics-watchdog.timer 2>/dev/null || true
 systemctl --user restart wireplumber
 
 # Give WirePlumber a moment to settle before firing udev events.

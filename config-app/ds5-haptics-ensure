@@ -1,0 +1,56 @@
+#!/bin/sh
+# ds5-haptics-ensure — keep DS5Dongle auto-haptics alive.
+#
+# Two recurring failure modes made the controller stop vibrating:
+#   1. The DualSense ALSA card drops to the "off" profile (typically when the
+#      pad goes into Bluetooth standby, or after a WirePlumber state reset).
+#      Without the "pro-audio" profile the 4ch ds5_dongle_sink does not exist,
+#      so the loopback has no target and haptics die.
+#   2. When the sink disappears/reappears (or is recreated with a new object
+#      id), the running pw-loopback carries node.dont-reconnect=true and never
+#      reattaches, so it dangles silently.
+#
+# This script fixes both, idempotently, and does nothing (no feedback risk)
+# when the dongle is unplugged. It is run at start and periodically by
+# ds5-haptics-watchdog.timer.
+
+DONGLE_IDS='054c:0ce6 054c:0df2'
+SVC=ds5-haptics-loopback.service
+
+# 1. Bail out cleanly if the dongle is not plugged in — nothing to keep alive,
+#    and we must never touch audio routing when it's absent.
+present=0
+for id in $DONGLE_IDS; do
+  lsusb 2>/dev/null | grep -qi "$id" && present=1
+done
+[ "$present" = 1 ] || exit 0
+
+# 2. Locate the DualSense card dynamically (name varies by pad/firmware).
+card=$(pactl list cards short 2>/dev/null | awk 'tolower($0) ~ /dualsense/ {print $2; exit}')
+[ -n "$card" ] || exit 0
+
+# 3. Force the pro-audio profile if the card fell off it. If we had to change
+#    it, restart the loopback so its links rebuild against the (new) sink.
+profile=$(pactl list cards 2>/dev/null | sed -n "/Name: $card/,/Active Profile/p" | awk '/Active Profile/{print $3; exit}')
+if [ "$profile" != "pro-audio" ]; then
+  pactl set-card-profile "$card" pro-audio 2>/dev/null || exit 0
+  # Wait for the renamed 4ch sink to show up (WirePlumber rename race).
+  for i in $(seq 1 20); do
+    pactl list short sinks 2>/dev/null | grep -q '\bds5_dongle_sink\b' && break
+    sleep 0.3
+  done
+  systemctl --user reset-failed "$SVC" 2>/dev/null
+  systemctl --user restart "$SVC" 2>/dev/null
+  exit 0
+fi
+
+# 4. Profile is fine. Make sure the sink exists and the loopback is actually
+#    wired to it; if the sink is there but no link feeds it, the loopback is
+#    dangling (dont-reconnect) — restart it.
+pactl list short sinks 2>/dev/null | grep -q '\bds5_dongle_sink\b' || exit 0
+linked=$(pw-link -l 2>/dev/null | grep -A1 -E '^ds5_haptics_playback_(game|output):output_AUX0$' | grep -c 'ds5_dongle_sink')
+if [ "$linked" = 0 ]; then
+  systemctl --user reset-failed "$SVC" 2>/dev/null
+  systemctl --user restart "$SVC" 2>/dev/null
+fi
+exit 0

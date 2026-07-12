@@ -24,6 +24,12 @@ Type=simple
 # pw-loopback to exit immediately and haptics dead until the next manual plug.
 # If the sink never shows up (dongle truly absent) the guard fails and the
 # service does not start — no feedback loop.
+#
+# Force the DualSense card onto its pro-audio profile FIRST: without it the 4ch
+# ds5_dongle_sink never exists and the guard below would spin until the start
+# limit (the pad often boots / wakes on the "off" profile). Best-effort ('-'),
+# dynamic card lookup so it works whatever the pad's card name is.
+ExecStartPre=-/bin/sh -c 'c=$$(pactl list cards short | awk "tolower(\\$$0) ~ /dualsense/ {print \\$$2; exit}"); [ -n "$$c" ] && pactl set-card-profile "$$c" pro-audio'
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do pactl list short sinks | grep -q "\\bds5_dongle_sink\\b" && exit 0; sleep 0.5; done; exit 1'
 # Two passive loopbacks feed the dongle's AUX0/AUX1, both following ASM's Sonar
 # channels so only the wanted audio triggers haptics:
