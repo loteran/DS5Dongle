@@ -31,8 +31,12 @@ Type=simple
 # dynamic card lookup so it works whatever the pad's card name is.
 ExecStartPre=-/bin/sh -c 'c=$$(pactl list cards short | awk "tolower(\\$$0) ~ /dualsense/ {print \\$$2; exit}"); [ -n "$$c" ] && pactl set-card-profile "$$c" pro-audio'
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do pactl list short sinks | grep -q "\\bds5_dongle_sink\\b" && exit 0; sleep 0.5; done; exit 1'
-# Two passive loopbacks feed the dongle's AUX0/AUX1, both following ASM's Sonar
-# channels so only the wanted audio triggers haptics:
+# Two passive loopbacks feed the dongle's AUX2/AUX3, both following ASM's Sonar
+# channels so only the wanted audio triggers haptics.
+# The 4ch pro-audio sink maps aux0/aux1 to the pad's 3.5mm headphone jack and
+# aux2/aux3 to the left/right haptic actuators: feeding aux0/aux1 plays the
+# audio into the jack and never vibrates, which looks identical to a healthy
+# setup (profile, sink and links all fine) — hence AUX2/AUX3 here.
 #   * Game source:   the Arctis_Game sink (game channel). Media and Chat are
 #                    never captured, so they don't produce vibrations.
 #   * Output source: the Sonar "output" channel (effect_input.sonar-output-eq),
@@ -67,13 +71,13 @@ ExecStart=/bin/sh -c '\
   /usr/bin/pw-loopback -c 2 \
     --capture-props="node.name=ds5_haptics_capture_game media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$GAME_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
     --playback=ds5_dongle_sink \
-    --playback-props="node.name=ds5_haptics_playback_game node.dont-reconnect=true audio.position=[AUX0,AUX1] stream.dont-remix=true node.passive=true" \
+    --playback-props="node.name=ds5_haptics_playback_game node.dont-reconnect=true audio.position=[AUX2,AUX3] stream.dont-remix=true node.passive=true" \
   & \
   if [ -n "$$OUT_SRC" ] && pactl list short sinks | grep -qF "$$OUT_SRC"; then \
     /usr/bin/pw-loopback -c 2 \
       --capture-props="node.name=ds5_haptics_capture_output media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$OUT_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
       --playback=ds5_dongle_sink \
-      --playback-props="node.name=ds5_haptics_playback_output node.dont-reconnect=true audio.position=[AUX0,AUX1] stream.dont-remix=true node.passive=true" \
+      --playback-props="node.name=ds5_haptics_playback_output node.dont-reconnect=true audio.position=[AUX2,AUX3] stream.dont-remix=true node.passive=true" \
     & \
   fi; \
   wait'

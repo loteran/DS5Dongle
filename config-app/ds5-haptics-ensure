@@ -45,10 +45,12 @@ if [ "$profile" != "pro-audio" ]; then
 fi
 
 # 4. Profile is fine. Make sure the sink exists and the loopback is actually
-#    wired to it; if the sink is there but no link feeds it, the loopback is
-#    dangling (dont-reconnect) — restart it.
+#    wired to the haptic actuators; if the sink is there but no link feeds
+#    aux2/aux3, the loopback is dangling (dont-reconnect) — restart it.
+#    Only aux2/aux3 drive the motors (aux0/aux1 are the pad's headphone jack),
+#    so a loopback wired to aux0/aux1 is as dead as no loopback at all.
 pactl list short sinks 2>/dev/null | grep -q '\bds5_dongle_sink\b' || exit 0
-linked=$(pw-link -l 2>/dev/null | grep -A1 -E '^ds5_haptics_playback_(game|output):output_AUX0$' | grep -c 'ds5_dongle_sink')
+linked=$(pw-link -l 2>/dev/null | grep -A1 -E '^ds5_haptics_playback_(game|output):output_AUX[23]$' | grep -c 'ds5_dongle_sink:playback_AUX[23]')
 if [ "$linked" = 0 ]; then
   systemctl --user reset-failed "$SVC" 2>/dev/null
   systemctl --user restart "$SVC" 2>/dev/null
