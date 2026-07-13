@@ -37,43 +37,36 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do pactl list short sinks | grep 
 # aux2/aux3 to the left/right haptic actuators: feeding aux0/aux1 plays the
 # audio into the jack and never vibrates, which looks identical to a healthy
 # setup (profile, sink and links all fine) — hence AUX2/AUX3 here.
-#   * Game source:   the Arctis_Game sink (game channel). Media and Chat are
-#                    never captured, so they don't produce vibrations.
-#   * Output source: the Sonar "output" channel (effect_input.sonar-output-eq),
-#                    i.e. ASM's external output (HDMI/TV) destination.
-# Both are resolved at start time. Because ASM creates its Sonar sinks
-# (Arctis_Game/Chat/Media) as its own pw-loopback nodes that may come up AFTER
-# this service — at boot/cold-plug ds5_dongle_sink can exist while Arctis_Game
-# does not yet — we POLL for Arctis_Game for up to ~15s before giving up. Without
-# this wait the check lost the race, GAME_SRC fell back to the default sink (the
-# physical headset = the full Game+Chat+Media mix) and the controller vibrated on
-# chat audio too. Only when Arctis_Game never appears (ASM/Sonar not installed) do
-# we fall back to a single capture of the system default sink and vibrate on
-# everything — haptics keep working with no dependency on ASM.
+# Which sinks get captured is decided by /usr/lib/ds5dongle/ds5-haptics-sources
+# (shared with the watchdog, see that script for the rules — in short: everything
+# vibrates except ASM's Chat and Media channels, and it works with no ASM at all).
+# It is given 15s to wait for ASM's sinks, which come up after this service at
+# boot/cold-plug; deciding too early made the capture fall back to the full
+# Game+Chat+Media mix and the pad vibrated on chat audio.
+#
+# The previous version hardcoded the ASM "output" channel as
+# effect_input.sonar-output-eq and gated it on `pactl list short sinks`. That node
+# is media.class=Audio/Sink/Internal, so it never appears in that list: the gate
+# could not ever pass and the second loopback never started — audio sent to the
+# TV never produced any vibration.
+#
 # Each loopback activates only when its sink plays audio. node.dont-reconnect=true
 # on each playback side ensures no fallback to speakers if the dongle disappears
 # at runtime. ($$ is systemd's escape for a literal $ passed to the shell.)
 ExecStart=/bin/sh -c '\
-  GAME_SRC=; \
-  OUT_SRC=; \
-  for i in $$(seq 1 30); do \
-    if pactl list short sinks | grep -q "\\bArctis_Game\\b"; then \
-      GAME_SRC=Arctis_Game; \
-      OUT_SRC=effect_input.sonar-output-eq; \
-      break; \
-    fi; \
-    sleep 0.5; \
-  done; \
-  if [ -z "$$GAME_SRC" ]; then \
-    GAME_SRC=$$(pactl get-default-sink); \
-    OUT_SRC=; \
+  eval "$$(/usr/lib/ds5dongle/ds5-haptics-sources 15)"; \
+  if [ -z "$$GAME_SRC" ] && [ -z "$$OUT_SRC" ]; then \
+    echo "no safe capture source (default sink is the dongle itself?) — not starting"; \
+    exit 1; \
   fi; \
-  /usr/bin/pw-loopback -c 2 \
-    --capture-props="node.name=ds5_haptics_capture_game media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$GAME_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
-    --playback=ds5_dongle_sink \
-    --playback-props="node.name=ds5_haptics_playback_game node.dont-reconnect=true audio.position=[AUX2,AUX3] stream.dont-remix=true node.passive=true" \
-  & \
-  if [ -n "$$OUT_SRC" ] && pactl list short sinks | grep -qF "$$OUT_SRC"; then \
+  if [ -n "$$GAME_SRC" ]; then \
+    /usr/bin/pw-loopback -c 2 \
+      --capture-props="node.name=ds5_haptics_capture_game media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$GAME_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
+      --playback=ds5_dongle_sink \
+      --playback-props="node.name=ds5_haptics_playback_game node.dont-reconnect=true audio.position=[AUX2,AUX3] stream.dont-remix=true node.passive=true" \
+    & \
+  fi; \
+  if [ -n "$$OUT_SRC" ]; then \
     /usr/bin/pw-loopback -c 2 \
       --capture-props="node.name=ds5_haptics_capture_output media.class=Stream/Input/Audio stream.capture.sink=true target.object=$$OUT_SRC audio.position=[FL,FR] stream.dont-remix=true node.passive=true" \
       --playback=ds5_dongle_sink \

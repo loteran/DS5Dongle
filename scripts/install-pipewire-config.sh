@@ -33,7 +33,7 @@ ok()   { printf '\033[32m[ok]\033[0m %s\n' "$*"; }
 [ "$(id -u)" -ne 0 ] || die "Run this as your normal user, not root — the WirePlumber/profile steps need your session. It calls sudo itself."
 
 for f in 51-ds5dongle.conf 70-ds5dongle.rules ds5dongle-loopback-stop ds5-haptics-loopback.service \
-         ds5-haptics-ensure ds5-haptics-watchdog.service ds5-haptics-watchdog.timer; do
+         ds5-haptics-ensure ds5-haptics-sources ds5-haptics-watchdog.service ds5-haptics-watchdog.timer; do
     [ -f "$SRC/$f" ] || die "Missing $SRC/$f — run this from a checked-out DS5Dongle tree."
 done
 
@@ -48,6 +48,7 @@ $SUDO install -Dm644 "$SRC/51-ds5dongle.conf"            /etc/wireplumber/wirepl
 $SUDO install -Dm644 "$SRC/70-ds5dongle.rules"           /etc/udev/rules.d/70-ds5dongle.rules
 $SUDO install -Dm755 "$SRC/ds5dongle-loopback-stop"      /usr/lib/ds5dongle/ds5dongle-loopback-stop
 $SUDO install -Dm755 "$SRC/ds5-haptics-ensure"           /usr/lib/ds5dongle/ds5-haptics-ensure
+$SUDO install -Dm755 "$SRC/ds5-haptics-sources"          /usr/lib/ds5dongle/ds5-haptics-sources
 $SUDO install -Dm644 "$SRC/ds5-haptics-loopback.service" /etc/systemd/user/ds5-haptics-loopback.service
 $SUDO install -Dm644 "$SRC/ds5-haptics-watchdog.service" /etc/systemd/user/ds5-haptics-watchdog.service
 $SUDO install -Dm644 "$SRC/ds5-haptics-watchdog.timer"   /etc/systemd/user/ds5-haptics-watchdog.timer

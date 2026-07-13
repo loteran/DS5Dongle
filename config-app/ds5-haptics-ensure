@@ -16,6 +16,10 @@
 
 DONGLE_IDS='054c:0ce6 054c:0df2'
 SVC=ds5-haptics-loopback.service
+# Same resolver the loopback service uses, so both agree on what "correctly
+# wired" means. Fall back to a sibling copy when running from a checked-out tree.
+SOURCES=/usr/lib/ds5dongle/ds5-haptics-sources
+[ -x "$SOURCES" ] || SOURCES="$(dirname "$0")/ds5-haptics-sources"
 
 # 1. Bail out cleanly if the dongle is not plugged in — nothing to keep alive,
 #    and we must never touch audio routing when it's absent.
@@ -52,6 +56,26 @@ fi
 pactl list short sinks 2>/dev/null | grep -q '\bds5_dongle_sink\b' || exit 0
 linked=$(pw-link -l 2>/dev/null | grep -A1 -E '^ds5_haptics_playback_(game|output):output_AUX[23]$' | grep -c 'ds5_dongle_sink:playback_AUX[23]')
 if [ "$linked" = 0 ]; then
+  systemctl --user reset-failed "$SVC" 2>/dev/null
+  systemctl --user restart "$SVC" 2>/dev/null
+  exit 0
+fi
+
+# 5. Links are fine, but they may be pointing at the wrong sinks: the loopbacks
+#    resolve their capture targets once, at start. When the user moves the system
+#    output (e.g. headset -> TV) or starts/stops ASM, the right answer changes and
+#    the running loopbacks would keep capturing the old sink — silently, since the
+#    links above still look healthy. Re-resolve and restart on drift.
+node_target() {
+  pw-cli info "$1" 2>/dev/null |
+    sed -n 's/.*target\.object = "\([^"]*\)".*/\1/p' | head -1
+}
+
+eval "$("$SOURCES" 2>/dev/null)"
+[ -n "$GAME_SRC$OUT_SRC" ] || exit 0   # nothing safe to capture — leave it alone
+
+if [ "$(node_target ds5_haptics_capture_game)" != "$GAME_SRC" ] ||
+   [ "$(node_target ds5_haptics_capture_output)" != "$OUT_SRC" ]; then
   systemctl --user reset-failed "$SVC" 2>/dev/null
   systemctl --user restart "$SVC" 2>/dev/null
 fi
