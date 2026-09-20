@@ -15,6 +15,13 @@
 > management (pair/reboot/forget without unplugging), Xbox Game Bar shortcuts,
 > Waveshare RP2350B-Plus-W board support, a macOS build script, and the
 > RAM-relocated hot path described in [Performance](#performance) below.
+>
+> **[v0.7.2](https://github.com/loteran/DS5Dongle/releases/tag/v0.7.2)**: fixed
+> controller input lag under sustained auto-haptics audio (the 48kHz→3kHz
+> haptics resample was expensive enough to delay the Bluetooth poll loop —
+> replaced with a fixed 1-in-16 decimation, see [Performance](#performance)).
+> Also: wake-on-PS is now a **runtime** config toggle (`enable_wake`, default
+> off) instead of a separate firmware build — one UF2 covers both cases now.
 
 ---
 
@@ -185,22 +192,21 @@ Before starting, make sure you have everything:
 ### Step 1 — Download the firmware
 
 1. Go to the **[Releases page](https://github.com/loteran/DS5Dongle/releases)**
-2. Under the latest release, download the file named **`DS5-dongle-X.X.X.uf2`**  
-   (ignore all the other files — you only need the `.uf2`)
+2. Under the latest release, download the file named **`ds5-bridge-vX.X.X.uf2`**  
+   (ignore all the other files — you only need this one `.uf2`)
 
 **Which UF2 to pick:**
 
 | Asset | When to use |
 | --- | --- |
-| `DS5-dongle-<version>.uf2` | **Default.** Recommended for everyone. |
-| `DS5-dongle-wake-<version>.uf2` | Only if you need the dongle to **wake a sleeping Windows host**. |
-| `DS5-dongle-debug-<version>.uf2` | Troubleshooting (USB-serial verbose logs). |
+| `ds5-bridge-<version>.uf2` | **This is the only one you need.** Wake-on-PS is a config toggle (off by default), not a separate build — see [Auto Haptics settings](#auto-haptics-settings) / the `enable_wake` field. |
+| `ds5-bridge-debug-<version>.uf2` | Troubleshooting only (USB-serial verbose logs). Not needed for normal use. |
 
-> ⚠️ The **wake** variant advertises USB `REMOTE_WAKEUP`. On Linux, a wake-capable
-> device is grabbed by Wine/Proton's libusb HID scanner, which can starve other
-> USB-HID tools (e.g. an Arctis headset control daemon) with `EBUSY` errors —
-> making them see the headset as permanently offline. Use the default UF2 unless
-> you specifically need host-wake.
+> ⚠️ Turning **wake-on-PS** on (`enable_wake`) makes the dongle advertise USB
+> `REMOTE_WAKEUP`. On Linux, a wake-capable device is grabbed by Wine/Proton's
+> libusb HID scanner, which can starve other USB-HID tools (e.g. an Arctis
+> headset control daemon) with `EBUSY` errors — making them see the headset as
+> permanently offline. Leave it off unless you specifically need host-wake.
 
 ---
 
@@ -216,10 +222,10 @@ Before starting, make sure you have everything:
 4. Copy the firmware onto it:
 
 ```bash
-cp DS5-dongle-X.X.X.uf2 /run/media/$USER/RP2350/
+cp ds5-bridge-vX.X.X.uf2 /run/media/$USER/RP2350/
 ```
 
-> 💡 Replace `X.X.X` with the actual version number you downloaded.
+> 💡 Replace `vX.X.X` with the actual version number you downloaded.
 
 #### On Windows
 
@@ -637,6 +643,26 @@ Open the [config tool](#step-5--open-the-config-tool) and adjust:
 - **Low-pass cutoff**: 80 Hz for deep bass rumble, 250–400 Hz for sharper impacts
 - **Mode**: if the game already sends native haptics and they clash, try Mode 2 (audio only)
 
+### Linux: the PipeWire loopback looks healthy but nothing vibrates
+
+Service active, `ds5_dongle_sink` `RUNNING`, `pw-link -l` shows the loopback linked to
+`playback_AUX2`/`AUX3` — and still nothing. Check **`auto_haptics_enable`**: it must be
+**`0`** (Off / pass-through) for the PC-side PipeWire loopback to drive the actuators.
+
+Modes `1` (Mix) and `2` (Replace) derive the felt "thump" from what the Pico itself receives
+on its own speaker channels (AUX0/AUX1) — which the loopback service never writes to on
+purpose (writing there would also play the audio out of the controller's physical headphone
+jack). So in Mix/Replace mode the loopback's audio (written to AUX2/AUX3, the actuator
+channels) is simply never looked at. Set it to `0` in the [config tool](#step-5--open-the-config-tool)
+or:
+
+```bash
+python3 scripts/set_ds5.py --auto-haptics-enable 0
+```
+
+Modes 1/2 are for the other use case — the DualSense's actual physical speaker output is your
+real audio device and you want haptics derived from what's actually playing on it.
+
 ### Linux: a game (e.g. Rocket League) has no controller rumble
 
 This is about **game/motor rumble** (vibration triggered by in-game events), not the audio
@@ -673,18 +699,26 @@ behaviour.
 | Parameter | Range | Default | Description |
 |-----------|-------|---------|-------------|
 | `haptics_gain` | 1.0 – 2.0 | 1.0 | Global haptics amplitude multiplier |
-| `speaker_volume` | -100 – 0 dB | -100 | DualSense internal speaker volume |
-| `audio_buffer_length` | 16 – 128 | 64 | Haptics PCM packet size (lower = less latency) |
-| `inactive_time` | 5 – 60 min | 30 | Auto-disconnect delay |
-| `disable_inactive_disconnect` | 0 / 1 | 0 | 1 = always stay connected |
+| `speaker_volume` | 0 – 127 | 100 | DualSense internal speaker volume (linear) |
+| `headset_volume` | 0 – 127 | 100 | DualSense headset-jack volume (linear) |
+| `speaker_gain` | 0 – 7 | 2 | Speaker hardware gain stage (0 = auto) |
+| `audio_buffer_length` | 16 – 128 | 32 | Haptics PCM packet size (lower = less latency) |
+| `inactive_time` | 0 – 60 min | 30 | Auto-disconnect delay; **`0` = always stay connected** (replaces the old separate `disable_inactive_disconnect` toggle) |
 | `disable_pico_led` | 0 / 1 | 0 | 1 = turn off Pico LED |
 | `polling_rate_mode` | 0 / 1 / 2 | 0 | 0=250Hz · 1=500Hz · 2=1000Hz |
 | `controller_mode` | 0 / 1 / 2 | 2 | 0=DS5 · 1=DSE Edge · 2=Auto |
-| `auto_haptics_enable` | 0 / 1 / 2 | 2 | Auto haptics mode |
+| `auto_haptics_enable` | 0 / 1 / 2 | 2 | Auto haptics mode — **must be `0`** if you use the PC-side PipeWire/WASAPI loopback, see [Troubleshooting](#-troubleshooting) |
 | `auto_haptics_gain` | 0 – 200% | 100 | Auto haptics intensity |
-| `auto_haptics_lowpass` | 0 / 1 / 2 / 3 | 0 | LP cutoff: 80/160/250/400 Hz |
+| `auto_haptics_lowpass` | 20 – 400 Hz | 80 | LP cutoff, free Hz value |
 | `enable_poweroff_shortcut` | 0 / 1 | 1 | 1 = PS+Triangle powers off the controller |
 | `enable_touchpad` | 0 / 1 | 1 | Touchpad default state on connect (PS+Circle toggles runtime) |
+| `battery_color_enable` | 0 / 1 | 1 | Lightbar color reflects battery level |
+| `auto_haptics_mute_replace` / `_mix` | 0 / 1 | 0 | Mute the physical speaker while auto-haptics (Replace/Mix mode) derives its signal from it |
+| `enable_usb_sn` | 0 / 1 | 0 | Advertise a USB serial number |
+| `ps_shortcut_enabled` | 0 / 1 | 0 | PS button → Xbox Game Bar shortcut (tap Win+G, hold Win+Tab) |
+| `disable_mic` / `disable_speaker` | 0 / 1 | 0 | Disable the controller mic / speaker entirely |
+| `enable_wake` | 0 / 1 | 0 | Wake-on-PS (see the ⚠️ under [Step 1](#step-1--download-the-firmware) before enabling) |
+| `trigger_reduce` | 0 – 10 | 0 | Adaptive trigger power reduction (0 = auto) |
 
 ---
 
@@ -708,25 +742,35 @@ git -C /tmp/pico-sdk/lib/tinyusb checkout --detach 0.20.0
 
 # Configure & build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPICO_SDK_PATH=/tmp/pico-sdk
-ninja -C build DS5-dongle
+ninja -C build ds5-bridge
 
 # Output
-ls build/DS5-dongle.uf2
+ls build/ds5-bridge.uf2
 ```
 
 Other boards: build the [Waveshare RP2350B-Plus-W](https://www.waveshare.com/wiki/RP2350B-Plus-W) (RP2350B + CYW43
-wireless module, 16 MB flash, USB-C) with `-DWAVESHARE_RP2350B_PLUS_W_BUILD=ON`; a Pico W (haptics only, no speaker)
-with `-DPICO_W_BUILD=ON`. On macOS, `tools/build-macos.sh` prepares a repo-local SDK checkout (prompting for missing
-Homebrew tools), pins TinyUSB, and builds — `tools/build-macos.sh --clean` to rebuild from scratch, or `--sdk-dir
-<path>` to reuse an existing SDK checkout.
+wireless module, 16 MB flash, USB-C) with `-DWAVESHARE_RP2350B_PLUS_W_BUILD=ON`. On macOS, `tools/build-macos.sh`
+prepares a repo-local SDK checkout (prompting for missing Homebrew tools), pins TinyUSB, and builds —
+`tools/build-macos.sh --clean` to rebuild from scratch, or `--sdk-dir <path>` to reuse an existing SDK checkout.
+
+> ⚠️ **Classic Pico W (`-DPICO_W_BUILD=ON`) is not supported by this fork's official releases** and will fail to
+> link: `cmake/relocate_to_ram.cmake` moves the BT/USB/audio hot path into RAM (`.time_critical`), which fits RP2350's
+> ~520 KB RAM (Pico 2 W, this project's target) but overflows RP2040's ~264 KB by roughly 200 KB (`region 'RAM'
+> overflowed`). This fork targets Pico 2 W only.
 
 ## Performance
 
-The hot audio/haptics/BT path — the resampler, the auto-haptics DSP, libopus, and the Bluetooth/USB packet handling —
-executes from **RAM** instead of flash (`cmake/relocate_to_ram.cmake`, `src/ram_mem.c`). This removes flash-fetch (XIP
-cache miss) stalls from the time-critical loop, which previously forced an overclock just to keep up. The firmware now
-runs the full audio path at the **stock 150 MHz clock** — no overclock, no core-voltage bump. If you build for a
-different board and it fails to boot, reduce the CPU frequency (and/or raise the voltage) in `CMakeLists.txt`.
+The hot audio/haptics/BT path — the auto-haptics DSP, libopus, and the Bluetooth/USB packet handling — executes from
+**RAM** instead of flash (`cmake/relocate_to_ram.cmake`, `src/ram_mem.c`). This removes flash-fetch (XIP cache miss)
+stalls from the time-critical loop, which previously forced an overclock just to keep up. The firmware now runs the
+full audio path at the **stock 150 MHz clock** — no overclock, no core-voltage bump. If you build for a different
+board and it fails to boot, reduce the CPU frequency (and/or raise the voltage) in `CMakeLists.txt`.
+
+The haptics DSP's 48kHz→3kHz downsampling stage no longer uses a resampler at all: it emits a fixed 1-in-16 decimated
+sample directly (`src/audio.cpp`). The ratio is exact (48000/3000 = 16), and the haptics channel is felt, not heard,
+so a polyphase filter's interpolation quality bought nothing here — it was, however, expensive enough under sustained
+real audio to delay the core's Bluetooth poll loop, felt as controller input lag. See the [v0.7.2 release
+notes](https://github.com/loteran/DS5Dongle/releases/tag/v0.7.2) for the full diagnosis.
 
 ## BOOTSEL button: switch, reboot, or clear controllers
 
