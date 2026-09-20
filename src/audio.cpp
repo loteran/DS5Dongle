@@ -29,7 +29,6 @@
 using std::clamp;
 using std::max;
 
-static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
@@ -79,9 +78,6 @@ void __not_in_flash_func(audio_loop)() {
 
     static float audio_buf[512 * 2];
     static uint audio_buf_pos = 0;
-    // 2. 从4ch中提取ch3/ch4，转换为float输入重采样器
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
 
     const uint8_t auto_mode  = get_config().auto_haptics_enable;
     const bool auto_mute     = ((auto_mode == 2 || actual_ch == 2) && get_config().auto_haptics_mute_replace) ||
@@ -102,7 +98,23 @@ void __not_in_flash_func(audio_loop)() {
     constexpr float ENV_ATK = 0.40f;
     constexpr float ENV_REL = 0.025f;
 
-    for (int i = 0; i < nframes; i++) {
+    static int8_t haptic_buf[SAMPLE_SIZE];
+    static int haptic_buf_pos = 0;
+    // 48kHz -> 3kHz is a fixed 16:1 ratio. Emitting every 16th sample directly
+    // instead of running the whole block through the WDL_Resampler's polyphase
+    // filter removes the single most expensive step in this per-sample loop.
+    // The haptics channel is felt, not heard (a "thump", not audio playback),
+    // so the resampler's interpolation quality buys nothing here. This used to
+    // take long enough per audio_loop() call, under sustained real audio (e.g.
+    // the PC-side auto-haptics PipeWire loopback playing actual game sound),
+    // to delay how often the main loop gets back to cyw43_arch_poll() --
+    // felt as Bluetooth controller input lag. See project history for the
+    // full diagnosis; a core1-offload alternative was tried and made the lag
+    // worse (added a per-call cross-core critical section to the same hot
+    // path), so it was reverted in favor of this cheaper inline approach.
+    static uint8_t haptic_phase = 0;
+
+    for (int i = 0; i < frames; i++) {
  #if !DISABLE_SPEAKER_PROC
         audio_buf[audio_buf_pos++] = raw[i * actual_ch] / 32768.0f * audio_gain;
         audio_buf[audio_buf_pos++] = raw[i * actual_ch + 1] / 32768.0f * audio_gain;
@@ -162,22 +174,16 @@ void __not_in_flash_func(audio_loop)() {
             }
         }
 
-        in_buf[i * 2]     = static_cast<WDL_ResampleSample>(clamp(h_l, -1.0f, 1.0f));
-        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(h_r, -1.0f, 1.0f));
-    }
+        // Emit only every 16th sample (48kHz -> 3kHz), directly as int8 — no
+        // resampler involved. See the note above the loop for why.
+        if (++haptic_phase < 16) {
+            continue;
+        }
+        haptic_phase = 0;
 
-    // 3. 48kHz -> 3kHz 重采样
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
-    const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
-
-    static int8_t haptic_buf[SAMPLE_SIZE];
-    static int haptic_buf_pos = 0;
-
-    // 4. 转换为int8并缓冲，满64字节即组包发送
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = static_cast<int>(out_buf[i * 2] * 127.0f);
-        int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
-        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // 似乎clamp有点多余？还是以防万一吧
+        int val_l = static_cast<int>(clamp(h_l, -1.0f, 1.0f) * 127.0f);
+        int val_r = static_cast<int>(clamp(h_r, -1.0f, 1.0f) * 127.0f);
+        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127);
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
 
         if (haptic_buf_pos != SAMPLE_SIZE) {
@@ -223,10 +229,6 @@ void __not_in_flash_func(audio_loop)() {
 }
 
 void audio_init() {
-    resampler.SetMode(true, 0, false);
-    resampler.SetRates(48000, 3000);
-    resampler.SetFeedMode(true);
-    resampler.Prealloc(2, 24, 6);
  #if !DISABLE_SPEAKER_PROC
     queue_init(&audio_fifo, sizeof(audio_raw_element), 2);
     critical_section_init(&opus_cs);

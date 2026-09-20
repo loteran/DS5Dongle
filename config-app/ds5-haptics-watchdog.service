@@ -1,0 +1,8 @@
+[Unit]
+Description=DS5Dongle auto-haptics self-heal (force pro-audio + relink loopback)
+Documentation=https://github.com/loteran/DS5Dongle
+After=pipewire.service wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/ds5dongle/ds5-haptics-ensure

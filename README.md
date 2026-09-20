@@ -349,23 +349,32 @@ pactl set-card-profile alsa_card.usb-Sony_Interactive_Entertainment_DualSense_Wi
 
 This sets up the background audio copy. It uses a **systemd service** (a background program that runs automatically) and a **udev rule** (a rule that starts/stops it when you plug/unplug the Pico).
 
-All the needed files are already in the repo. Run these commands from inside the project folder:
+All the needed files are already in the repo, inside `config-app/`. Run these commands from inside the project folder:
 
 ```bash
-# Copy the background service file
-install -Dm644 ds5-haptics-loopback.service \
+# Copy the background service + the self-heal watchdog
+install -Dm644 config-app/ds5-haptics-loopback.service \
   ~/.config/systemd/user/ds5-haptics-loopback.service
+install -Dm644 config-app/ds5-haptics-watchdog.service \
+  ~/.config/systemd/user/ds5-haptics-watchdog.service
+install -Dm644 config-app/ds5-haptics-watchdog.timer \
+  ~/.config/systemd/user/ds5-haptics-watchdog.timer
 
-# Copy the plug/unplug rules (needs admin — that's what sudo is for)
-sudo install -Dm644 70-ds5dongle.rules        /etc/udev/rules.d/70-ds5dongle.rules
-sudo install -Dm755 ds5dongle-loopback-stop   /usr/lib/ds5dongle/ds5dongle-loopback-stop
+# Copy the helper scripts (needs admin — that's what sudo is for).
+# ds5-haptics-sources decides which audio the haptics follow; the service and
+# the watchdog both call it, so the loopback will not start without it.
+sudo install -Dm755 config-app/ds5-haptics-sources    /usr/lib/ds5dongle/ds5-haptics-sources
+sudo install -Dm755 config-app/ds5-haptics-ensure     /usr/lib/ds5dongle/ds5-haptics-ensure
+sudo install -Dm755 config-app/ds5dongle-loopback-stop /usr/lib/ds5dongle/ds5dongle-loopback-stop
 
-# Tell systemd and udev to reload their configs
+# Copy the plug/unplug rules
+sudo install -Dm644 config-app/70-ds5dongle.rules     /etc/udev/rules.d/70-ds5dongle.rules
+
+# Tell systemd and udev to reload their configs, and start the watchdog
 systemctl --user daemon-reload
+systemctl --user enable --now ds5-haptics-watchdog.timer
 sudo udevadm control --reload-rules
 ```
-
-> 💡 If you cloned the repo, these files are at the root of the project (not inside `config-app/`).
 
 **4. Unplug and replug the Pico**
 
@@ -381,13 +390,21 @@ systemctl --user is-active ds5-haptics-loopback.service
 pw-link -lo | grep -A2 "ds5_haptics_playback"
 ```
 
-> ✅ **How to know it worked:** the first command prints `active`, and the second shows `ds5_dongle_sink` as the target for `ds5_haptics_playback_game` (and `ds5_haptics_playback_output` when ASM is installed). Now start a game, make noise, and feel the controller vibrate.
+> ✅ **How to know it worked:** the first command prints `active`, and the second shows `ds5_haptics_playback_game` (and `ds5_haptics_playback_output`, when a second source is captured) linked to `ds5_dongle_sink` — specifically to its **`playback_AUX2` / `playback_AUX3`** ports. Those two carry the haptic actuators; `AUX0`/`AUX1` are the pad's 3.5mm headphone jack, so a loopback wired there plays into the jack and never vibrates. Now start a game, make noise, and feel the controller vibrate.
 
 > ⚠️ **If the loopback targets your speakers instead of the Pico** — check that the WirePlumber rule from step 1 is applied (`pw-dump | grep ds5_dongle_sink`). If empty, the rule file might have a typo.
 
+**Which audio drives the haptics?**
+
+`ds5-haptics-sources` decides this, and both the loopback and the watchdog follow it:
+
+- **On a plain PipeWire setup**, the haptics follow your **default output device** — whatever you hear vibrates. Switch the output (headset → TV) and the watchdog re-points the loopback within 30s.
+- **With [Arctis Sound Manager](https://github.com/loteran/arctis-sound-manager) installed**, the haptics follow its **Game** channel, plus your system output device when ASM doesn't own it (a TV/HDMI, speakers) — that mix carries games that bypass ASM. ASM's **Chat** and **Media** channels are never captured, so voice chat and music don't make the pad buzz.
+- The Pico's own sink is never captured — that would feed it back into itself.
+
 **Optional — send only one game's audio (not the whole system)**
 
-By default, all system audio goes to the Pico. If you only want one game to drive the haptics:
+If you only want one game to drive the haptics:
 
 1. Install `pavucontrol`: `sudo apt install pavucontrol` (Ubuntu) / `sudo pacman -S pavucontrol` (Arch)
 2. Open `pavucontrol` → **Playback** tab while the game is running
@@ -398,9 +415,12 @@ Everything else (music, Discord, etc.) will only go to your headset/speakers.
 **To fully uninstall the audio routing:**
 
 ```bash
+systemctl --user disable --now ds5-haptics-watchdog.timer
 systemctl --user stop ds5-haptics-loopback.service
-rm ~/.config/systemd/user/ds5-haptics-loopback.service
-sudo rm -f /etc/udev/rules.d/70-ds5dongle.rules /usr/lib/ds5dongle/ds5dongle-loopback-stop
+rm -f ~/.config/systemd/user/ds5-haptics-loopback.service \
+      ~/.config/systemd/user/ds5-haptics-watchdog.service \
+      ~/.config/systemd/user/ds5-haptics-watchdog.timer
+sudo rm -rf /etc/udev/rules.d/70-ds5dongle.rules /usr/lib/ds5dongle
 rm -f ~/.config/wireplumber/wireplumber.conf.d/51-ds5dongle.conf
 systemctl --user daemon-reload
 sudo udevadm control --reload-rules

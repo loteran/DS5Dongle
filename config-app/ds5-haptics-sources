@@ -1,0 +1,71 @@
+#!/bin/sh
+# ds5-haptics-sources — decide which sinks the auto-haptics loopbacks capture.
+#
+# Shared by ds5-haptics-loopback.service (at start) and ds5-haptics-ensure (the
+# watchdog, to detect that the answer changed — e.g. the user switched the
+# system output to the TV — and restart the loopback accordingly). Keeping the
+# rules in ONE place is deliberate: when the service and the watchdog disagreed
+# about what "correctly wired" means, haptics broke silently.
+#
+# Prints two shell-eval-able lines, either of which may be empty:
+#   GAME_SRC='…'   sink whose monitor drives the haptics
+#   OUT_SRC='…'    second sink to capture as well (may be empty)
+#
+# The rule, in the user's terms: everything vibrates EXCEPT ASM's Chat and
+# Media channels.
+#
+#   * With ASM (Arctis_Game exists) — capture Arctis_Game (the game channel;
+#     Chat and Media are separate sinks and are never captured). ALSO capture
+#     the system output device when it is one ASM does not own (a TV/HDMI,
+#     speakers…): that mix carries games that bypass ASM entirely and ASM's own
+#     "output" channel, all of which should vibrate. The Arctis headset itself
+#     is skipped: its mix carries Chat, and its game audio is already covered by
+#     Arctis_Game.
+#   * Without ASM — capture the default sink. Everything the user hears
+#     vibrates. No dependency on ASM being installed.
+#   * Never capture ds5_dongle_sink: feeding the dongle back into itself builds
+#     an infinite feedback loop (a note that keeps looping).
+#
+# Usage: ds5-haptics-sources [wait_seconds]
+#   wait_seconds: poll that long for ASM's Arctis_Game to appear before
+#   deciding (ASM creates its Sonar sinks late at boot). Default 0 = decide now.
+
+wait_secs=${1:-0}
+
+sinks() { pactl list short sinks 2>/dev/null | awk '{print $2}'; }
+has_sink() { sinks | grep -qx "$1"; }
+
+# Poll for ASM's game channel. At boot/cold-plug ds5_dongle_sink can exist while
+# ASM's sinks do not yet: deciding too early made GAME_SRC fall back to the full
+# mix and the pad vibrated on chat audio.
+i=0
+while :; do
+  has_sink Arctis_Game && break
+  i=$((i + 1))
+  [ "$i" -ge $((wait_secs * 2)) ] && break
+  sleep 0.5
+done
+
+GAME_SRC=
+OUT_SRC=
+
+if has_sink Arctis_Game; then
+  GAME_SRC=Arctis_Game
+  default=$(pactl get-default-sink 2>/dev/null)
+  case "$default" in
+    ds5_dongle_sink) ;;                 # feedback loop guard
+    Arctis_* | effect_*) ;;             # ASM virtual channels: Chat/Media must never vibrate
+    *SteelSeries* | *Arctis*) ;;        # ASM's headset: carries Chat; its game audio is already in Arctis_Game
+    "") ;;
+    *) has_sink "$default" && OUT_SRC=$default ;;   # TV/HDMI/speakers: capture the mix
+  esac
+else
+  default=$(pactl get-default-sink 2>/dev/null)
+  case "$default" in
+    ds5_dongle_sink) ;;                 # feedback loop guard
+    "") ;;
+    *) has_sink "$default" && GAME_SRC=$default ;;  # no ASM: everything vibrates
+  esac
+fi
+
+printf "GAME_SRC='%s'\nOUT_SRC='%s'\n" "$GAME_SRC" "$OUT_SRC"
