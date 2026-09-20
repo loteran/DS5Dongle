@@ -544,7 +544,7 @@ These are the three settings that control how the audio is converted to vibratio
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| **Mode** | **0** = disabled · **1** = mix audio haptics with game haptics · **2** = audio haptics only | 2 |
+| **Mode** | **Full audio** = raw ch3/ch4 passthrough · **Bass mix** = ch3/ch4 + pad-speaker bass, blended · **Pad speaker** = pad-speaker bass only, ignores ch3/ch4 | Pad speaker |
 | **Intensity** | How strong the vibrations are (percentage) | 100% |
 | **Low-pass cutoff** | Which frequencies trigger vibrations — lower = more bass-heavy | 0 (80 Hz) |
 
@@ -552,16 +552,22 @@ These are the three settings that control how the audio is converted to vibratio
 
 | You want… | Use these settings |
 |---|---|
-| Strong bass rumble (racing, explosions) | Mode 2 · 80 Hz · 100% |
-| More detail (FPS footsteps, reloads) | Mode 2 · 250–400 Hz · 100% |
+| Strong bass rumble (racing, explosions) | Pad speaker · 80 Hz · 100% |
+| More detail (FPS footsteps, reloads) | Pad speaker · 250–400 Hz · 100% |
 | Vibrations are too weak | Increase intensity to 120–150% |
 | Vibrations are too strong | Decrease intensity to 50–80% |
-| Game already sends haptics + you want audio too | Mode 1 (mix) |
-| Turn haptics off temporarily | Mode 0 |
+| Game already sends native haptics + you want audio too | Bass mix |
+| Turn auto-haptics off temporarily (native game haptics still work) | Full audio |
 
-> 🐧 **Linux, using the PipeWire loopback from [Step 4](#linux-pipewire):** use Mode **0 or 1**,
-> not 2 — see [Troubleshooting](#linux-the-pipewire-loopback-looks-healthy-but-nothing-vibrates)
-> for why "Replace" is the one mode that goes silent under that setup.
+> 🐧 **Linux, using the PipeWire loopback from [Step 4](#linux-pipewire):** use **Full audio** or
+> **Bass mix**, not **Pad speaker** — see
+> [Troubleshooting](#linux-the-pipewire-loopback-looks-healthy-but-nothing-vibrates) for why
+> "Pad speaker" is the one mode that goes silent under that setup.
+>
+> 🪟 **Windows, using the built-in WASAPI loopback:** the opposite applies — use **Bass mix** or
+> **Pad speaker**, not **Full audio**. The Windows loopback plays into the pad's own speaker
+> channels (what "Pad speaker" mode listens to), not the dedicated ch3/ch4 haptic channel that
+> "Full audio" needs.
 
 ---
 
@@ -636,7 +642,7 @@ If the problem persists, check your WirePlumber configuration file for typos.
 ### Windows: the controller doesn't vibrate even though the app is running
 
 - Make sure the dongle is connected — the app shows a green indicator when it detects the Pico
-- Check the **Auto Haptics** section in the app: Mode must be **1 (Mix)** or **2 (Replace)**, not 0
+- Check the **Auto Haptics** section in the app: Mode must be **Bass mix** or **Pad speaker**, not **Full audio** (see the 🪟 note above — the Windows loopback plays into the pad's own speaker channels)
 - The loopback captures your **default audio output** device. If audio is routed to a non-default device, it won't be captured. Check that the app's status banner shows the correct source device
 - Try playing audio with the volume at a reasonable level — very low volumes may not trigger noticeable haptics
 
@@ -645,28 +651,27 @@ If the problem persists, check your WirePlumber configuration file for typos.
 Open the [config tool](#step-5--open-the-config-tool) and adjust:
 - **Intensity**: start at 100%, go up to 150% if too weak or down to 50% if too strong
 - **Low-pass cutoff**: 80 Hz for deep bass rumble, 250–400 Hz for sharper impacts
-- **Mode**: if the game already sends native haptics and they clash, try Mode 2 (audio only)
+- **Mode**: if the game already sends native haptics and they clash with the audio-derived signal, try **Pad speaker** (ignores native haptics entirely — only works if real audio reaches the pad's own speaker channels, see the platform notes above)
 
 ### Linux: the PipeWire loopback looks healthy but nothing vibrates
 
 Service active, `ds5_dongle_sink` `RUNNING`, `pw-link -l` shows the loopback linked to
 `playback_AUX2`/`AUX3` — and still nothing. Check **`auto_haptics_enable`**: it must be
-**`0` (Off) or `1` (Mix)** — **not `2` (Replace)** — for the PC-side PipeWire loopback to
-drive the actuators. Counter-intuitively, "Replace" is the one mode that silences it.
+**`0` Full audio or `1` Bass mix** — **not `2` Pad speaker** — for the PC-side PipeWire
+loopback to drive the actuators.
 
-> **Why this is backwards-feeling:** the mode names describe what happens to the signal
-> *derived from AUX0/AUX1* (the Pico's own speaker/headphone-jack channels), not to AUX2/AUX3
-> (the actuator channels the loopback actually writes to) — the two are handled by unrelated
-> code paths that only "Replace" happens to make mutually exclusive:
-> - **`0` Off** — AUX2/AUX3 pass straight through, raw. This is what the loopback needs.
-> - **`1` Mix** — AUX2/AUX3 pass through too, just low-pass filtered and mixed with whatever
->   is derived from AUX0/AUX1 (silence, in the loopback setup — the loopback never writes
->   there on purpose, since that would also play audio out of the controller's physical
->   headphone jack). Works, with extra filtering.
-> - **`2` Replace** — *discards* AUX2/AUX3 entirely and uses only what's derived from
->   AUX0/AUX1. Since the loopback never feeds those, this mode is silent under this setup —
->   it's meant for the other scenario, where the DualSense's own speaker output is your real
->   audio device and you want haptics derived from what's actually playing on it.
+> **Why:** the loopback writes to AUX2/AUX3 (the actuator channels) on purpose, never to
+> AUX0/AUX1 (the pad's own speaker/headphone-jack channels — writing there would also play
+> the audio out loud through the pad's jack). Each mode treats those two inputs differently:
+> - **`0` Full audio** — AUX2/AUX3 pass straight through, raw. This is what the loopback needs.
+> - **`1` Bass mix** — AUX2/AUX3 pass through too, just low-pass filtered, mixed with whatever
+>   bass is synthesized from AUX0/AUX1 (silence, in the loopback setup). Works, with extra
+>   filtering.
+> - **`2` Pad speaker** — *discards* AUX2/AUX3 entirely and vibrates only from what's
+>   synthesized from AUX0/AUX1. Since the loopback never feeds those, this mode is silent
+>   under this setup — it's meant for the other scenario, where the DualSense's own speaker
+>   output is your real audio device and you want haptics derived from what's actually
+>   playing on it (e.g. a game that sends effects to the controller's built-in speaker).
 
 Set it to `0` or `1` in the [config tool](#step-5--open-the-config-tool), or:
 
