@@ -292,7 +292,14 @@ jobs:
   release:
     name: Attach UF2s to release
     needs: build
-    if: inputs.upload_tag != ''
+    # needs: build alone is treated as failed by GitHub Actions if ANY matrix
+    # leg fails, even with fail-fast: false on that matrix -- which silently
+    # skipped this job (and so uploaded zero assets) the first time an
+    # optional variant (picow) failed to build, despite standard/debug/
+    # waveshare succeeding. !cancelled() lets this run whenever the matrix
+    # finished (pass or fail); "Prepare release assets" below still hard-fails
+    # if the mandatory standard artifact is missing.
+    if: ${{ !cancelled() && inputs.upload_tag != '' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
