@@ -10,6 +10,12 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 [![Usage stats](https://img.shields.io/badge/usage-stats-informational)](https://loteran.github.io/DS5Dongle/stats/)
 
+> Synced with upstream [awalol/DS5Dongle `v0.7.2-hotfix`](https://github.com/awalol/DS5Dongle/releases/tag/v0.7.2-hotfix):
+> controller mic capture, improved wake-from-sleep, BOOTSEL-button controller
+> management (pair/reboot/forget without unplugging), Xbox Game Bar shortcuts,
+> Waveshare RP2350B-Plus-W board support, a macOS build script, and the
+> RAM-relocated hot path described in [Performance](#performance) below.
+
 ---
 
 ## Table of Contents
@@ -708,13 +714,52 @@ ninja -C build ds5-bridge
 ls build/ds5-bridge.uf2
 ```
 
+Other boards: build the [Waveshare RP2350B-Plus-W](https://www.waveshare.com/wiki/RP2350B-Plus-W) (RP2350B + CYW43
+wireless module, 16 MB flash, USB-C) with `-DWAVESHARE_RP2350B_PLUS_W_BUILD=ON`; a Pico W (haptics only, no speaker)
+with `-DPICO_W_BUILD=ON`. On macOS, `tools/build-macos.sh` prepares a repo-local SDK checkout (prompting for missing
+Homebrew tools), pins TinyUSB, and builds — `tools/build-macos.sh --clean` to rebuild from scratch, or `--sdk-dir
+<path>` to reuse an existing SDK checkout.
+
+## Performance
+
+The hot audio/haptics/BT path — the resampler, the auto-haptics DSP, libopus, and the Bluetooth/USB packet handling —
+executes from **RAM** instead of flash (`cmake/relocate_to_ram.cmake`, `src/ram_mem.c`). This removes flash-fetch (XIP
+cache miss) stalls from the time-critical loop, which previously forced an overclock just to keep up. The firmware now
+runs the full audio path at the **stock 150 MHz clock** — no overclock, no core-voltage bump. If you build for a
+different board and it fails to boot, reduce the CPU frequency (and/or raise the voltage) in `CMakeLists.txt`.
+
+## BOOTSEL button: switch, reboot, or clear controllers
+
+While the firmware is running, the Pico's **BOOTSEL button** doubles as a controller and reset control — no unplugging
+or re-flashing needed:
+
+- **Short press (click):** if a controller is connected, disconnect it (pairing is kept, so it can reconnect later) —
+  frees the dongle for a different already-paired controller. If nothing is connected, starts a 30-second scan to pair
+  a new one (put the DualSense into pairing mode: hold **PS + Create/Share** until the light bar flashes).
+- **Double click:** reboot the Pico — re-enters pairing inquiry, drops the current connection, recovers from a
+  transient glitch.
+- **Triple click:** reboot into BOOTSEL — re-enumerates as USB mass storage so you can drag on a new `.uf2`, without
+  holding BOOTSEL while plugging in.
+- **Long press (~1.5 s):** disconnect and forget every paired controller — all stored pairings are deleted and
+  blacklisted (won't silently auto-reconnect, even across a power cycle); the LED flashes six times to confirm.
+
+The web config's **Reboot to Bootloader** button does the same as triple-click, without touching the physical button.
+```
+
 ---
 
 ## 📌 Technical notes
 
-- DSP runs on **Core 0** inside `audio_loop()` — no new threads, no queues added
-- All state is `static` (16 bytes: 2× LP + 2× envelope)
-- Cost: ~6 multiply-adds per sample + 1 division — negligible at 320 MHz
+- Auto-haptics DSP (LP filter + envelope follower + soft-clip), the 48 kHz→3 kHz
+  resample, and the haptics BT report packing run on **Core 1** — offloaded from
+  Core 0 via a queue + critical section, the same pattern already used for the
+  speaker Opus path, so Core 0's `cyw43_arch_poll()`/`tud_task()` loop stays free
+  of audio-processing jitter (this used to delay Bluetooth HID servicing under
+  audio load, perceived as controller input lag)
+- All DSP state is `static` (16 bytes: 2× LP + 2× envelope)
+- Cost: ~6 multiply-adds per sample + 1 division — negligible even at the stock
+  150 MHz clock (no overclock needed since the hot path runs from RAM, see
+  [Performance](#performance))
 - `x / (1 + |x|)` avoids `tanhf()` which is expensive on Cortex-M33
 - Classic rumble goes through a separate path (`tud_hid_set_report_cb` → BT report `0x31`) — unaffected
 - Config stored in last flash sector (4 kB), validated by magic header + CRC32

@@ -96,11 +96,19 @@
 
 //------------- CLASS -------------//
 #define CFG_TUD_AUDIO             1
+#ifdef ENABLE_WAKE_HID
+#define CFG_TUD_HID               2
+#else
 #define CFG_TUD_HID               1
+#endif
 #define CFG_TUD_CDC               ENABLE_SERIAL
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0
+#ifdef ENABLE_WAKE_HID
+#define CFG_TUD_VENDOR            1 // routes MS OS 2.0 vendor request to tud_vendor_control_xfer_cb
+#else
 #define CFG_TUD_VENDOR            0
+#endif
 
 // HID buffer size Should be sufficient to hold ID (if any) + Data
 #define CFG_TUD_HID_EP_BUFSIZE    64
@@ -115,7 +123,7 @@
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX              16
 
-// Microphone (IN/TX) path: 2-channel, 16-bit
+// Microphone (IN/TX) path: 1-channel, 16-bit
 #define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              2
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_TX              16
@@ -127,8 +135,8 @@
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX           CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN
 
-#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (3 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
-#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ        (4 * CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX)
+#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (8 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
+#define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ        (16 * CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX)
 
 // Enable OUT EP (speaker) and IN EP (mic)
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT                 1

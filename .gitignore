@@ -1,6 +1,10 @@
 build
+.deps
 .vscode
 .idea
 example
 __pycache__/
 *.pyc
+.DS_Store
+.cache
+/tools/__pycache__
