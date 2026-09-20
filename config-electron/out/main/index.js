@@ -56,7 +56,11 @@ const IPC = {
   SHELL_OPEN_URL: "shell:openUrl",
   // Telemetry consent — renderer reads and writes via settings UI
   TELEMETRY_GET_CONSENT: "telemetry:getConsent",
-  TELEMETRY_SET_CONSENT: "telemetry:setConsent"
+  TELEMETRY_SET_CONSENT: "telemetry:setConsent",
+  // Loopback source selection (Windows-only)
+  LOOPBACK_LIST_DEVICES: "loopback:listDevices",
+  LOOPBACK_GET_SOURCE: "loopback:getSource",
+  LOOPBACK_SET_SOURCE: "loopback:setSource"
 };
 const IPC_EVENTS = {
   DEVICE_CHANGED: "device:changed",
@@ -70,6 +74,7 @@ class LoopbackEngine extends events.EventEmitter {
   status = { running: false };
   stopping = false;
   killTimer = null;
+  deviceResolvers = [];
   start() {
     if (process.platform !== "win32") return;
     if (this.child) return;
@@ -119,7 +124,8 @@ class LoopbackEngine extends events.EventEmitter {
       }
       if (this.status.running) this.setStatus({ running: false });
     });
-    this.send({ cmd: "start" });
+    const source = loadSettings().loopbackSourceName ?? "";
+    this.send({ cmd: "start", source });
   }
   stop() {
     if (!this.child) {
@@ -140,6 +146,41 @@ class LoopbackEngine extends events.EventEmitter {
   }
   getStatus() {
     return { ...this.status };
+  }
+  listDevices() {
+    if (process.platform !== "win32" || !this.child) {
+      return Promise.resolve({ devices: [], defOutId: -1 });
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const wrappedResolve = (r) => {
+        if (!settled) {
+          settled = true;
+          resolve(r);
+        }
+      };
+      const timer = setTimeout(() => {
+        const idx = this.deviceResolvers.indexOf(wrappedResolve);
+        if (idx !== -1) this.deviceResolvers.splice(idx, 1);
+        wrappedResolve({ devices: [], defOutId: -1 });
+      }, 2e3);
+      this.deviceResolvers.push((r) => {
+        clearTimeout(timer);
+        wrappedResolve(r);
+      });
+      this.send({ cmd: "list-devices" });
+    });
+  }
+  getSource() {
+    return loadSettings().loopbackSourceName ?? null;
+  }
+  setSource(name) {
+    const s = loadSettings();
+    s.loopbackSourceName = name;
+    saveSettings(s);
+    if (this.child) {
+      this.send({ cmd: "set-source", source: name ?? "" });
+    }
   }
   // ---- Private ---------------------------------------------------------------
   setStatus(status) {
@@ -171,6 +212,11 @@ class LoopbackEngine extends events.EventEmitter {
           deviceName: msg.deviceName,
           error: msg.error
         });
+      } else if (msg.event === "devices") {
+        const resolver = this.deviceResolvers.shift();
+        if (resolver) {
+          resolver({ devices: msg.devices ?? [], defOutId: msg.defOutId ?? -1 });
+        }
       }
     }
   }
@@ -763,6 +809,9 @@ function registerHandlers() {
   });
   electron.ipcMain.handle(IPC.TELEMETRY_GET_CONSENT, () => getConsent());
   electron.ipcMain.handle(IPC.TELEMETRY_SET_CONSENT, (_e, value) => setConsent(value));
+  electron.ipcMain.handle(IPC.LOOPBACK_LIST_DEVICES, () => loopbackEngine.listDevices());
+  electron.ipcMain.handle(IPC.LOOPBACK_GET_SOURCE, () => loopbackEngine.getSource());
+  electron.ipcMain.handle(IPC.LOOPBACK_SET_SOURCE, (_e, name) => loopbackEngine.setSource(name));
 }
 const TELEMETRY_INTERVAL_MS = 3e4;
 function startTelemetryTimer(win) {
@@ -831,7 +880,7 @@ function createWindow() {
     }
   });
   win.on("close", () => {
-    saveSettings({ windowBounds: win.getBounds() });
+    saveSettings({ ...loadSettings(), windowBounds: win.getBounds() });
   });
   if (process.env["ELECTRON_RENDERER_URL"]) {
     win.loadURL(process.env["ELECTRON_RENDERER_URL"]);

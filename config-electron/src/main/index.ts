@@ -28,9 +28,13 @@ function createWindow(): BrowserWindow {
     },
   });
 
-  // Persist window geometry on close
+  // Persist window geometry on close. saveSettings() overwrites the whole
+  // file, so this must merge onto the current settings (telemetry consent,
+  // install ID, etc.) rather than replace them -- writing { windowBounds }
+  // alone wiped telemetryConsent on every close, so the consent dialog kept
+  // reappearing on every launch instead of just the first.
   win.on('close', () => {
-    saveSettings({ windowBounds: win.getBounds() });
+    saveSettings({ ...loadSettings(), windowBounds: win.getBounds() });
   });
 
   // Load renderer

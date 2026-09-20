@@ -110,7 +110,14 @@ export function useFirmwareUpdateCheck(currentVersion?: string): { latestVersion
 }
 
 function isNewer(a: string, b: string): boolean {
-  const parse = (v: string): number[] => v.split(/[.-]/).map(n => parseInt(n, 10) || 0);
+  // Pad to exactly 3 numeric segments so a short/malformed version (e.g. the
+  // firmware reporting "dev" for a local, untagged build) never leaves a
+  // segment `undefined` -- `7 > undefined` is false in JS, which silently
+  // broke the comparison instead of treating the missing segment as 0.
+  const parse = (v: string): [number, number, number] => {
+    const parts = v.split(/[.-]/).map(n => parseInt(n, 10) || 0);
+    return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0];
+  };
   const [am, an, ap] = parse(a);
   const [bm, bn, bp] = parse(b);
   return am > bm || (am === bm && an > bn) || (am === bm && an === bn && ap > bp);
