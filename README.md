@@ -559,6 +559,10 @@ These are the three settings that control how the audio is converted to vibratio
 | Game already sends haptics + you want audio too | Mode 1 (mix) |
 | Turn haptics off temporarily | Mode 0 |
 
+> 🐧 **Linux, using the PipeWire loopback from [Step 4](#linux-pipewire):** use Mode **0 or 1**,
+> not 2 — see [Troubleshooting](#linux-the-pipewire-loopback-looks-healthy-but-nothing-vibrates)
+> for why "Replace" is the one mode that goes silent under that setup.
+
 ---
 
 ### Python script (CLI / no Chrome)
@@ -647,14 +651,24 @@ Open the [config tool](#step-5--open-the-config-tool) and adjust:
 
 Service active, `ds5_dongle_sink` `RUNNING`, `pw-link -l` shows the loopback linked to
 `playback_AUX2`/`AUX3` — and still nothing. Check **`auto_haptics_enable`**: it must be
-**`0`** (Off / pass-through) for the PC-side PipeWire loopback to drive the actuators.
+**`0` (Off) or `1` (Mix)** — **not `2` (Replace)** — for the PC-side PipeWire loopback to
+drive the actuators. Counter-intuitively, "Replace" is the one mode that silences it.
 
-Modes `1` (Mix) and `2` (Replace) derive the felt "thump" from what the Pico itself receives
-on its own speaker channels (AUX0/AUX1) — which the loopback service never writes to on
-purpose (writing there would also play the audio out of the controller's physical headphone
-jack). So in Mix/Replace mode the loopback's audio (written to AUX2/AUX3, the actuator
-channels) is simply never looked at. Set it to `0` in the [config tool](#step-5--open-the-config-tool)
-or:
+> **Why this is backwards-feeling:** the mode names describe what happens to the signal
+> *derived from AUX0/AUX1* (the Pico's own speaker/headphone-jack channels), not to AUX2/AUX3
+> (the actuator channels the loopback actually writes to) — the two are handled by unrelated
+> code paths that only "Replace" happens to make mutually exclusive:
+> - **`0` Off** — AUX2/AUX3 pass straight through, raw. This is what the loopback needs.
+> - **`1` Mix** — AUX2/AUX3 pass through too, just low-pass filtered and mixed with whatever
+>   is derived from AUX0/AUX1 (silence, in the loopback setup — the loopback never writes
+>   there on purpose, since that would also play audio out of the controller's physical
+>   headphone jack). Works, with extra filtering.
+> - **`2` Replace** — *discards* AUX2/AUX3 entirely and uses only what's derived from
+>   AUX0/AUX1. Since the loopback never feeds those, this mode is silent under this setup —
+>   it's meant for the other scenario, where the DualSense's own speaker output is your real
+>   audio device and you want haptics derived from what's actually playing on it.
+
+Set it to `0` or `1` in the [config tool](#step-5--open-the-config-tool), or:
 
 ```bash
 python3 scripts/set_ds5.py --auto-haptics-enable 0
@@ -707,7 +721,7 @@ behaviour.
 | `disable_pico_led` | 0 / 1 | 0 | 1 = turn off Pico LED |
 | `polling_rate_mode` | 0 / 1 / 2 | 0 | 0=250Hz · 1=500Hz · 2=1000Hz |
 | `controller_mode` | 0 / 1 / 2 | 2 | 0=DS5 · 1=DSE Edge · 2=Auto |
-| `auto_haptics_enable` | 0 / 1 / 2 | 2 | Auto haptics mode — **must be `0`** if you use the PC-side PipeWire/WASAPI loopback, see [Troubleshooting](#-troubleshooting) |
+| `auto_haptics_enable` | 0 / 1 / 2 | 2 | Auto haptics mode — **`0` or `1`, not `2`**, if you use the PC-side PipeWire/WASAPI loopback, see [Troubleshooting](#-troubleshooting) |
 | `auto_haptics_gain` | 0 – 200% | 100 | Auto haptics intensity |
 | `auto_haptics_lowpass` | 20 – 400 Hz | 80 | LP cutoff, free Hz value |
 | `enable_poweroff_shortcut` | 0 / 1 | 1 | 1 = PS+Triangle powers off the controller |
