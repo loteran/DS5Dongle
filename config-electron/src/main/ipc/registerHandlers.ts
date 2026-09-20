@@ -60,12 +60,25 @@ export function registerHandlers(): void {
     hapticsDongle.saveConfig();
 
     if (reconnect) {
-      // reconnectUsb() triggers USB soft-reset; the handle is invalid immediately.
+      // Config is already written + saved to flash above — everything from
+      // here on is just re-establishing the HID handle, so a slow or missed
+      // hotplug event must never be reported as a lost write.
       hapticsDongle.reconnectUsb();
-      // Wait for the device to re-enumerate instead of a blind sleep.
-      await waitForReattach(5000);
-      hapticsDongle.connect();
-      return hapticsDongle.readConfig();
+      try {
+        await waitForReattach(10000);
+      } catch {
+        // The 'attach' event can be missed/late; fall back to polling
+        // connect() directly instead of failing outright.
+      }
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          hapticsDongle.connect();
+          return hapticsDongle.readConfig();
+        } catch {
+          if (attempt === 4) throw new Error('Config saved, but USB did not come back — reconnect manually.');
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
     }
 
     return cfg;

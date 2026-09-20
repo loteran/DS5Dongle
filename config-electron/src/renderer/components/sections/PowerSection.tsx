@@ -12,16 +12,16 @@ export default function PowerSection() {
       <SliderRow
         label="Auto power off"
         value={draft.inactiveTime}
-        min={5} max={60} step={1}
-        format={(v) => `${v} min`}
-        disabled={draft.disableInactiveDisconnect}
+        min={0} max={60} step={1}
+        format={(v) => (v === 0 ? 'Disabled' : `${v} min`)}
+        disabled={draft.inactiveTime === 0}
         onChange={(v) => updateField('inactiveTime', v)}
       />
       <ToggleRow
         label="Stay connected"
         description="Disable auto power-off when idle"
-        value={draft.disableInactiveDisconnect}
-        onChange={(v) => updateField('disableInactiveDisconnect', v)}
+        value={draft.inactiveTime === 0}
+        onChange={(v) => updateField('inactiveTime', v ? 0 : 30)}
       />
       <ToggleRow
         label="Disable Pico LED"

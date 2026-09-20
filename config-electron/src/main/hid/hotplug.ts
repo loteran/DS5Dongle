@@ -45,7 +45,7 @@ export function stopHotplugWatcher(): void {
 }
 
 /** Resolves when a DS5Dongle re-attaches, rejects after `timeoutMs`. */
-export function waitForReattach(timeoutMs = 5000): Promise<void> {
+export function waitForReattach(timeoutMs = 10000): Promise<void> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       usbBus.off('attach', onAttach as (...args: unknown[]) => void);
