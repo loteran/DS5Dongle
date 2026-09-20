@@ -15,6 +15,6 @@ jobs:
     uses: ./.github/workflows/build-firmware.yml
     with:
       version: ${{ github.sha }}   # reusable build shortens a full SHA to 7
-      picow: true
+      # picow left at its false default -- see release.yml for why (RAM overflow).
       waveshare: true
       no_batt_led_check: true

@@ -23,5 +23,9 @@ jobs:
       version: ${{ github.event.release.tag_name || inputs.tag }}
       asset_suffix: -${{ github.event.release.tag_name || inputs.tag }}
       upload_tag: ${{ github.event.release.tag_name || inputs.tag }}
-      picow: true
+      # picow (classic RP2040 Pico W) intentionally left at its false default:
+      # the RAM-relocation build (cmake/relocate_to_ram.cmake) moves the BT/
+      # USB/audio hot path into .time_critical RAM sections, which overflows
+      # RP2040's much smaller RAM budget (~264 KB vs RP2350's ~520 KB) by
+      # ~200 KB. This fork targets Pico 2 W (RP2350) only.
       waveshare: true
