@@ -10,7 +10,7 @@ import ShortcutsSection from './components/sections/ShortcutsSection';
 import LightbarSection from './components/sections/LightbarSection';
 import SettingsSection from './components/sections/SettingsSection';
 import PresetBar from './components/PresetBar';
-import UpdateBanner from './components/UpdateBanner';
+import UpdateBanner, { FirmwareUpdateBanner } from './components/UpdateBanner';
 import { useDevice } from './hooks/useDevice';
 import { useConfigStore } from './state/configStore';
 import { ds5 } from './ipc/client';
@@ -42,6 +42,7 @@ export default function App() {
       />
 
       <UpdateBanner />
+      <FirmwareUpdateBanner currentFirmwareVersion={device.firmwareVersion} />
 
       <PresetBar connected={device.connected} />
 

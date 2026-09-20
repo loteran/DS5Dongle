@@ -47,6 +47,9 @@ enum {
     ITF_NUM_CDC,
     ITF_NUM_CDC_DATA,
 #endif
+#ifdef ENABLE_WAKE_HID
+    ITF_NUM_HID_KBD,
+#endif
     ITF_NUM_TOTAL,
 
     CONFIG_DESC_LEN_AUDIO_IAD =
@@ -55,8 +58,22 @@ enum {
 #else
         0,
 #endif
+    // Grown from upstream's 0x00E3 base by our own additions (auto-haptics
+    // config surface doesn't add descriptor bytes, but earlier interface
+    // work did) -- verified against the actual array size by the
+    // static_assert right after descriptor_configuration[] below, so a
+    // wrong value here fails the build instead of breaking enumeration
+    // silently on real hardware.
     CONFIG_DESC_LEN_BASE = 0x010E + CONFIG_DESC_LEN_AUDIO_IAD,
-    CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE
+    // Keyboard interface adds 25 bytes:
+    //   9 (interface) + 9 (HID class) + 7 (EP IN) = 25
+    CONFIG_DESC_LEN_WAKE_KBD =
+#ifdef ENABLE_WAKE_HID
+        25,
+#else
+        0,
+#endif
+    CONFIG_DESC_LEN_TOTAL = CONFIG_DESC_LEN_BASE + CONFIG_DESC_LEN_WAKE_KBD
 #if ENABLE_SERIAL
         + TUD_CDC_DESC_LEN
 #endif
@@ -80,7 +97,11 @@ tusb_desc_device_t desc_device =
 {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
+#ifdef ENABLE_WAKE_HID
+    .bcdUSB = 0x0210, // USB 2.1 -- required so the host requests BOS (carries our MS OS 2.0 descriptor)
+#else
     .bcdUSB = 0x0200,
+#endif
 
     // Use Interface Association Descriptor (IAD) for Audio
     // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
@@ -102,7 +123,7 @@ tusb_desc_device_t desc_device =
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
-    .iSerialNumber = 0x00,
+    // .iSerialNumber = 0x00,
 
     .bNumConfigurations = 0x01
 };
@@ -111,6 +132,10 @@ tusb_desc_device_t desc_device =
 // Application return pointer to descriptor
 uint8_t const *tud_descriptor_device_cb(void) {
     desc_device.idProduct = ds_mode() ? 0x0CE6 : 0x0DF2;
+    desc_device.iSerialNumber = get_config().enable_usb_sn ? 0x03 : 0x00;
+    // USB 2.1 (so the host requests the BOS / MS OS 2.0 selective-suspend opt-in)
+    // only when wake is enabled; plain USB 2.0 otherwise.
+    desc_device.bcdUSB = get_config().enable_wake ? 0x0210 : 0x0200;
     return reinterpret_cast<uint8_t const *>(&desc_device);
 }
 
@@ -126,7 +151,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bConfigurationValue: 1
     0x00, // iConfiguration: 0
 #ifdef ENABLE_WAKE_HID
-    0xE0, // bmAttributes: SELF-POWERED, REMOTE-WAKEUP (needed to wake the host)
+    0xE0, // bmAttributes: SELF-POWERED + REMOTE-WAKEUP
 #else
     0xC0, // bmAttributes: SELF-POWERED, NO REMOTE-WAKEUP
 #endif
@@ -204,8 +229,8 @@ uint8_t descriptor_configuration[] = {
     0x04, // bTerminalID: 4
     0x02, 0x04, // wTerminalType: Headset (0x0402)
     0x03, // bAssocTerminal: 3 (paired with speaker)
-    0x02, // bNrChannels: 2
-    0x03, 0x00, // wChannelConfig: L/R Front (0x0003)
+    0x02, // bNrChannels: 2 (mono mic duplicated; matches the real DS5's 2-ch mic)
+    0x03, 0x00, // wChannelConfig: Front Left + Front Right
     0x00, // iChannelNames: 0
     0x00, // iTerminal: 0
 
@@ -367,7 +392,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (2-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
@@ -383,7 +408,7 @@ uint8_t descriptor_configuration[] = {
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0xC4, 0x00, // wMaxPacketSize: 196 bytes
+    0xC4, 0x00, // wMaxPacketSize: 196 bytes ((48+1) samples * 2 ch * 2 bytes)
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress
@@ -437,7 +462,46 @@ uint8_t descriptor_configuration[] = {
     // --- CDC ACM (USB Serial) ---
     TUD_CDC_DESCRIPTOR(ITF_NUM_CDC, STRID_CDC, 0x85, 0x08, 0x06, 0x86, 0x40),
 #endif
+#ifdef ENABLE_WAKE_HID
+    // --- INTERFACE DESCRIPTOR (HID Boot Keyboard, wake key only) ---
+    // EP IN 0x87 (chosen to avoid collision with CDC notification EP 0x85
+    // when ENABLE_SERIAL is also defined).
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    ITF_NUM_HID_KBD, // bInterfaceNumber
+    0x00, // bAlternateSetting: 0
+    0x01, // bNumEndpoints: 1 (IN only)
+    0x03, // bInterfaceClass: HID
+    0x01, // bInterfaceSubClass: Boot
+    0x01, // bInterfaceProtocol: Keyboard
+    0x00, // iInterface
+
+    // HID Descriptor (keyboard)
+    0x09, // bLength
+    0x21, // bDescriptorType (HID)
+    0x11, 0x01, // bcdHID: 1.11
+    0x00, // bCountryCode
+    0x01, // bNumDescriptors
+    0x22, // bDescriptorType: Report
+    0x2D, 0x00, // wDescriptorLength: 45 (sizeof desc_hid_report_kbd)
+
+    // Endpoint Descriptor (HID IN: EP7)
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x87, // bEndpointAddress: IN EP7
+    0x03, // bmAttributes: Interrupt
+    0x08, 0x00, // wMaxPacketSize: 8 (boot keyboard report)
+    0x0A, // bInterval: 10ms
+#endif
 };
+
+// If this fails, CONFIG_DESC_LEN_BASE/CONFIG_DESC_LEN_WAKE_KBD above don't match
+// the actual byte count in descriptor_configuration[] any more (e.g. after adding
+// or removing descriptor bytes without updating the hand-maintained length
+// constants) -- wTotalLength would then lie to the host and USB enumeration
+// breaks, silently and only on real hardware, not in this build.
+static_assert(sizeof(descriptor_configuration) == CONFIG_DESC_LEN_TOTAL,
+              "descriptor_configuration[] size does not match CONFIG_DESC_LEN_TOTAL");
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
@@ -464,6 +528,18 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     }else {
         descriptor_configuration[offset - 16] = 0xB5;
     }
+
+    // Wake / Game Bar are runtime features. Advertise REMOTE_WAKEUP only when wake is
+    // on, and include the keyboard interface (the LAST descriptor block) only when wake
+    // OR the Game Bar shortcut is on. With both off this is byte-identical to the base.
+    const bool wake = get_config().enable_wake;
+    const bool kbd = wake || get_config().ps_shortcut_enabled;
+    descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
+    const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
+                               : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_WAKE_KBD);
+    descriptor_configuration[2] = (uint8_t) (total & 0xFF);                  // wTotalLength lo
+    descriptor_configuration[3] = (uint8_t) (total >> 8);                    // wTotalLength hi
+    descriptor_configuration[4] = kbd ? ITF_NUM_TOTAL : (ITF_NUM_TOTAL - 1); // bNumInterfaces
     return descriptor_configuration;
 }
 
@@ -632,7 +708,7 @@ uint8_t const desc_hid_report_ds[] = {
     0xC0, // End Collection
     // 321 bytes
 };
-static_assert(sizeof(desc_hid_report_ds) == 0x0141);
+static_assert(sizeof(desc_hid_report_ds) == 321);
 
 uint8_t const desc_hid_report_dse[] = {
     0x05, 0x01, // Usage Page (Generic Desktop Ctrls)
@@ -853,12 +929,47 @@ uint8_t const desc_hid_report_dse[] = {
     0xC0, // End Collection
     // 437 bytes
 };
-static_assert(sizeof(desc_hid_report_dse) == 0x01B5);
+static_assert(sizeof(desc_hid_report_dse) == 437);
+
+#ifdef ENABLE_WAKE_HID
+// 41-byte boot-keyboard report descriptor (modifier byte + reserved + 6 keycodes,
+// no Report ID -- boot protocol forbids one and avoids collision with the gamepad's Report ID 1).
+uint8_t const desc_hid_report_kbd[] = {
+    0x05, 0x01,       // Usage Page (Generic Desktop)
+    0x09, 0x06,       // Usage (Keyboard)
+    0xA1, 0x01,       // Collection (Application)
+    0x05, 0x07,       //   Usage Page (Keyboard/Keypad)
+    0x19, 0xE0,       //   Usage Minimum (Left Control)
+    0x29, 0xE7,       //   Usage Maximum (Right GUI)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x01,       //   Logical Maximum (1)
+    0x75, 0x01,       //   Report Size (1)
+    0x95, 0x08,       //   Report Count (8)
+    0x81, 0x02,       //   Input (Data,Var,Abs) -- modifier byte
+    0x95, 0x01,       //   Report Count (1)
+    0x75, 0x08,       //   Report Size (8)
+    0x81, 0x01,       //   Input (Const) -- reserved byte
+    0x95, 0x06,       //   Report Count (6)
+    0x75, 0x08,       //   Report Size (8)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x25, 0x65,       //   Logical Maximum (101)
+    0x05, 0x07,       //   Usage Page (Keyboard/Keypad)
+    0x19, 0x00,       //   Usage Minimum (0)
+    0x29, 0x65,       //   Usage Maximum (101)
+    0x81, 0x00,       //   Input (Data,Array) -- 6 keycodes
+    0xC0              // End Collection
+};
+_Static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor length must match wDescriptorLength in config descriptor");
+#endif
 
 // Invoked when received GET HID REPORT DESCRIPTOR
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
+#ifdef ENABLE_WAKE_HID
+    // HID instance 1 is the wake-only boot keyboard added by ENABLE_WAKE_HID.
+    if (itf == 1) return desc_hid_report_kbd;
+#endif
     (void) itf;
     if (ds_mode()) {
         return desc_hid_report_ds;
@@ -903,7 +1014,8 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             break;
 
         case STRID_SERIAL:
-            chr_count = board_usb_get_serial(_desc_str + 1, 32);
+            chr_count = board_usb_get_serial(_desc_str + 1, 32) + 1;
+            _desc_str[chr_count] = '2'; // refresh windows cache (bumped for 2-ch mic)
             break;
 
         default:
@@ -931,3 +1043,100 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
     return _desc_str;
 }
+
+#ifdef ENABLE_WAKE_HID
+//--------------------------------------------------------------------+
+// Microsoft OS 2.0 descriptors (carried via BOS).
+//
+// Why this is here: the dongle is a composite device with USB Audio Class
+// interfaces. By default Windows audio engine policy keeps USB audio devices
+// at D0 even during system S3, blocking selective-suspend for the whole
+// composite. Without selective-suspend the device never enters USB suspend,
+// so tud_remote_wakeup() never works -- breaking wake-on-PS.
+//
+// MS OS 2.0 lets us tell Windows "yes, please selective-suspend this audio
+// function": we set the registry property "SelectiveSuspendEnabled" = 1 on
+// the audio function (interface 0). This causes Windows to write
+//   HKLM\SYSTEM\CurrentControlSet\Enum\USB\<VID&PID>\<instance>
+//        \Device Parameters\SelectiveSuspendEnabled = 1
+// at enumeration time, opting our audio function in to selective suspend
+// without breaking haptics.
+//
+// Reference: "Microsoft OS 2.0 Descriptors Specification".
+//--------------------------------------------------------------------+
+
+#define MS_OS_20_VENDOR_CODE 0x01
+
+// Total length of the MS OS 2.0 descriptor set:
+//   Set Header (10) + Config Subset (8) + Function Subset (8) +
+//   Registry Property Feature (10 fixed + 48 name + 4 data = 62) = 88 bytes.
+// Used in BOS platform capability descriptor; verified by static_assert below.
+#define MS_OS_20_DESC_LEN    88
+
+#define BOS_TOTAL_LEN        (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
+
+uint8_t const desc_bos[] = {
+    // BOS header
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+    // Platform capability: MS OS 2.0
+    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_DESC_LEN, MS_OS_20_VENDOR_CODE)
+};
+
+uint8_t const *tud_descriptor_bos_cb(void) {
+    // BOS carries the MS OS 2.0 selective-suspend opt-in, only meaningful for wake.
+    // When wake is off the device is USB 2.0 and the host won't ask -- guard anyway.
+    if (!get_config().enable_wake) return nullptr;
+    return desc_bos;
+}
+
+uint8_t const desc_ms_os_20[] = {
+    // --- Set Header (10 bytes) ---
+    U16_TO_U8S_LE(0x000A),                                    // wLength
+    U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),            // wDescriptorType
+    U32_TO_U8S_LE(0x06030000),                                // dwWindowsVersion = Win 8.1+
+    U16_TO_U8S_LE(MS_OS_20_DESC_LEN),                         // wTotalLength
+
+    // --- Configuration Subset (8 bytes) ---
+    U16_TO_U8S_LE(0x0008),                                    // wLength
+    U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION),      // wDescriptorType
+    0x00,                                                     // bConfigurationValue (config index, 0)
+    0x00,                                                     // bReserved
+    U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A),                  // wTotalLength of this subset
+
+    // --- Function Subset for the Audio function (8 bytes) ---
+    // Audio Control is interface 0; AudioStreaming OUT/IN are 1/2 -- this
+    // subset covers all three because they belong to the same function.
+    U16_TO_U8S_LE(0x0008),                                    // wLength
+    U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),           // wDescriptorType
+    0x00,                                                     // bFirstInterface (audio control)
+    0x00,                                                     // bReserved
+    U16_TO_U8S_LE(MS_OS_20_DESC_LEN - 0x0A - 0x08),           // wSubsetLength
+
+    // --- Feature: Registry Property "SelectiveSuspendEnabled" = 1 (62 bytes) ---
+    U16_TO_U8S_LE(0x003E),                                    // wLength = 62
+    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),             // wDescriptorType
+    U16_TO_U8S_LE(0x0004),                                    // wPropertyDataType = REG_DWORD_LITTLE_ENDIAN
+    U16_TO_U8S_LE(48),                                        // wPropertyNameLength = 48 bytes (24 UTF-16 chars)
+    // PropertyName "SelectiveSuspendEnabled\0" UTF-16LE (48 bytes)
+    'S',0, 'e',0, 'l',0, 'e',0, 'c',0, 't',0, 'i',0, 'v',0,
+    'e',0, 'S',0, 'u',0, 's',0, 'p',0, 'e',0, 'n',0, 'd',0,
+    'E',0, 'n',0, 'a',0, 'b',0, 'l',0, 'e',0, 'd',0,  0,0,
+    U16_TO_U8S_LE(0x0004),                                    // wPropertyDataLength = 4 bytes
+    U32_TO_U8S_LE(0x00000001),                                // PropertyData = 1 (enabled)
+};
+TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == MS_OS_20_DESC_LEN, "MS OS 2.0 descriptor length mismatch");
+
+// Vendor-class control transfer hook. Windows reads BOS, sees the MS OS 2.0
+// platform capability, then issues this vendor request to fetch the
+// descriptor set itself.
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    if (!get_config().enable_wake) return false;
+    if (stage != CONTROL_STAGE_SETUP) return true;
+    if (request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) return false;
+    if (request->bRequest == MS_OS_20_VENDOR_CODE && request->wIndex == 7) {
+        // wIndex == 7 -> MS_OS_20_DESCRIPTOR_INDEX
+        return tud_control_xfer(rhport, request, (void *)(uintptr_t)desc_ms_os_20, sizeof(desc_ms_os_20));
+    }
+    return false;
+}
+#endif // ENABLE_WAKE_HID

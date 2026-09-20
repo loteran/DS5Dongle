@@ -2,8 +2,28 @@
 const electron = require("electron");
 const path = require("path");
 const fs = require("fs");
-const HID = require("node-hid");
+const events = require("events");
 const child_process = require("child_process");
+const HID = require("node-hid");
+const crypto = require("crypto");
+const os = require("os");
+function _interopNamespaceDefault(e) {
+  const n = Object.create(null, { [Symbol.toStringTag]: { value: "Module" } });
+  if (e) {
+    for (const k in e) {
+      if (k !== "default") {
+        const d = Object.getOwnPropertyDescriptor(e, k);
+        Object.defineProperty(n, k, d.get ? d : {
+          enumerable: true,
+          get: () => e[k]
+        });
+      }
+    }
+  }
+  n.default = e;
+  return Object.freeze(n);
+}
+const os__namespace = /* @__PURE__ */ _interopNamespaceDefault(os);
 function settingsPath() {
   return path.join(electron.app.getPath("userData"), "settings.json");
 }
@@ -31,12 +51,153 @@ const IPC = {
   PRESETS_LIST: "presets:list",
   PRESETS_LOAD: "presets:load",
   PRESETS_SAVE: "presets:save",
-  PRESETS_DELETE: "presets:delete"
+  PRESETS_DELETE: "presets:delete",
+  APP_GET_VERSION: "app:getVersion",
+  SHELL_OPEN_URL: "shell:openUrl",
+  // Telemetry consent — renderer reads and writes via settings UI
+  TELEMETRY_GET_CONSENT: "telemetry:getConsent",
+  TELEMETRY_SET_CONSENT: "telemetry:setConsent"
 };
 const IPC_EVENTS = {
   DEVICE_CHANGED: "device:changed",
-  DEVICE_TELEMETRY: "device:telemetry"
+  DEVICE_TELEMETRY: "device:telemetry",
+  LOOPBACK_STATUS: "loopback:status"
 };
+const KILL_GRACE_MS = 500;
+class LoopbackEngine extends events.EventEmitter {
+  child = null;
+  stdoutBuf = "";
+  status = { running: false };
+  stopping = false;
+  killTimer = null;
+  start() {
+    if (process.platform !== "win32") return;
+    if (this.child) return;
+    const workerPath = path.join(__dirname, "loopback-worker.js");
+    if (!fs.existsSync(workerPath)) {
+      this.setStatus({ running: false, error: `loopback worker not found: ${workerPath}` });
+      return;
+    }
+    const env = { ...process.env };
+    let exe;
+    if (electron.app.isPackaged) {
+      exe = process.execPath;
+      env.ELECTRON_RUN_AS_NODE = "1";
+      env.AUDIFY_PATH = path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "audify");
+    } else {
+      const nodeExe = this.findNodeExecutable();
+      if (!nodeExe) {
+        this.setStatus({ running: false, error: "system Node.js executable not found in PATH (dev mode)" });
+        return;
+      }
+      exe = nodeExe;
+    }
+    this.stopping = false;
+    try {
+      this.child = child_process.spawn(exe, [workerPath], {
+        stdio: ["pipe", "pipe", "inherit"],
+        // inherit stderr → worker debug logs in our console
+        windowsHide: true,
+        env
+      });
+    } catch (err) {
+      this.setStatus({ running: false, error: `failed to spawn loopback worker: ${String(err)}` });
+      this.child = null;
+      return;
+    }
+    this.child.stdout?.setEncoding("utf8");
+    this.child.stdout?.on("data", (chunk) => this.onStdout(chunk));
+    this.child.on("error", (err) => {
+      this.setStatus({ running: false, error: `loopback worker error: ${String(err)}` });
+    });
+    this.child.on("exit", () => {
+      this.child = null;
+      this.stdoutBuf = "";
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = null;
+      }
+      if (this.status.running) this.setStatus({ running: false });
+    });
+    this.send({ cmd: "start" });
+  }
+  stop() {
+    if (!this.child) {
+      if (this.status.running) this.setStatus({ running: false });
+      return;
+    }
+    this.stopping = true;
+    this.send({ cmd: "stop" });
+    if (this.killTimer) clearTimeout(this.killTimer);
+    this.killTimer = setTimeout(() => {
+      if (this.child) {
+        try {
+          this.child.kill();
+        } catch {
+        }
+      }
+    }, KILL_GRACE_MS);
+  }
+  getStatus() {
+    return { ...this.status };
+  }
+  // ---- Private ---------------------------------------------------------------
+  setStatus(status) {
+    this.status = status;
+    this.emit("status", status);
+  }
+  send(msg) {
+    try {
+      this.child?.stdin?.write(JSON.stringify(msg) + "\n");
+    } catch {
+    }
+  }
+  onStdout(chunk) {
+    this.stdoutBuf += chunk;
+    let nl;
+    while ((nl = this.stdoutBuf.indexOf("\n")) !== -1) {
+      const line = this.stdoutBuf.slice(0, nl).trim();
+      this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (msg.event === "status") {
+        this.setStatus({
+          running: !!msg.running,
+          deviceName: msg.deviceName,
+          error: msg.error
+        });
+      }
+    }
+  }
+  // Locate the system `node` executable. process.execPath points at Electron,
+  // so it cannot be used here. We probe PATH via `where`/`which`, then a couple
+  // of well-known install locations as a fallback.
+  findNodeExecutable() {
+    const cmd = process.platform === "win32" ? "where node" : "which node";
+    try {
+      const out = child_process.execSync(cmd, { encoding: "utf8" }).trim();
+      const first = out.split(/\r?\n/).map((s) => s.trim()).find(Boolean);
+      if (first && fs.existsSync(first)) return first;
+    } catch {
+    }
+    if (process.platform === "win32") {
+      const fallbacks = [
+        path.join(process.env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"),
+        path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "nodejs", "node.exe")
+      ];
+      for (const f of fallbacks) {
+        if (fs.existsSync(f)) return f;
+      }
+    }
+    return null;
+  }
+}
+const loopbackEngine = new LoopbackEngine();
 const SONY_VID = 1356;
 const DS5_PID = 3302;
 const EDGE_PID = 3570;
@@ -47,40 +208,60 @@ const REPORT_RSSI = 249;
 const CMD_WRITE_CONFIG = 1;
 const CMD_SAVE_CONFIG = 2;
 const CMD_RECONNECT_USB = 3;
-const CONFIG_SIZE = 23;
+const CONFIG_SIZE = 30;
 const FIELD_OFFSETS = {
   hapticsGain: 0,
   // float32LE [0..3]
   speakerVolume: 4,
-  // float32LE [4..7]
-  inactiveTime: 8,
-  // uint8
-  disableInactiveDisconnect: 9,
+  // uint8 [0..127] linear (was float dB pre-merge)
+  headsetVolume: 5,
+  // uint8 [0..127] linear
+  speakerGain: 6,
+  // uint8 [0..7] (0 = auto)
+  inactiveTime: 7,
+  // uint8 [0..60] minutes (0 = disable, folds old disableInactiveDisconnect)
+  disablePicoLed: 8,
   // uint8 (bool)
-  disablePicoLed: 10,
+  pollingRateMode: 9,
+  // uint8
+  audioBufferLength: 10,
+  // uint8
+  controllerMode: 11,
+  // uint8
+  autoHapticsEnable: 12,
+  // uint8
+  autoHapticsGain: 13,
+  // uint8
+  autoHapticsLowpassHz: 14,
+  // uint16LE [14..15]
+  enablePoweroffShortcut: 16,
   // uint8 (bool)
-  pollingRateMode: 11,
-  // uint8
-  audioBufferLength: 12,
-  // uint8
-  controllerMode: 13,
-  // uint8
-  autoHapticsEnable: 14,
-  // uint8
-  autoHapticsGain: 15,
-  // uint8
-  autoHapticsLowpassHz: 16,
-  // uint16LE [16..17]
-  enablePoweroffShortcut: 18,
+  enableTouchpad: 17,
   // uint8 (bool)
-  enableTouchpad: 19,
-  // uint8 (bool)
-  poweroffButton: 20,
+  poweroffButton: 18,
   // uint8
-  touchpadButton: 21,
+  touchpadButton: 19,
   // uint8
-  batteryColorEnable: 22
+  batteryColorEnable: 20,
   // uint8 (bool)
+  wakeEnable: 21,
+  // uint8 (bool) — legacy field, superseded by enableWake, kept for wire compat only
+  autoHapticsMuteReplace: 22,
+  // uint8 (bool)
+  autoHapticsMuteMix: 23,
+  // uint8 (bool)
+  enableUsbSn: 24,
+  // uint8 (bool)
+  psShortcutEnabled: 25,
+  // uint8 (bool) — Xbox Game Bar shortcut via HID keyboard
+  disableMic: 26,
+  // uint8 (bool)
+  disableSpeaker: 27,
+  // uint8 (bool)
+  enableWake: 28,
+  // uint8 (bool) — active wake toggle (upstream)
+  triggerReduce: 29
+  // uint8 [0..10] (0 = auto)
 };
 class DS5DeviceError extends Error {
   constructor(code, message) {
@@ -96,9 +277,10 @@ function unpackConfig(raw) {
   const o = FIELD_OFFSETS;
   const cfg = {
     hapticsGain: Math.min(2, Math.max(1, raw.readFloatLE(o.hapticsGain))),
-    speakerVolume: Math.min(0, Math.max(-100, raw.readFloatLE(o.speakerVolume))),
+    speakerVolume: raw.readUInt8(o.speakerVolume),
+    headsetVolume: raw.readUInt8(o.headsetVolume),
+    speakerGain: raw.readUInt8(o.speakerGain),
     inactiveTime: raw.readUInt8(o.inactiveTime),
-    disableInactiveDisconnect: raw.readUInt8(o.disableInactiveDisconnect) !== 0,
     disablePicoLed: raw.readUInt8(o.disablePicoLed) !== 0,
     pollingRateMode: raw.readUInt8(o.pollingRateMode),
     audioBufferLength: raw.readUInt8(o.audioBufferLength),
@@ -110,7 +292,16 @@ function unpackConfig(raw) {
     enableTouchpad: raw.readUInt8(o.enableTouchpad) !== 0,
     poweroffButton: raw.readUInt8(o.poweroffButton),
     touchpadButton: raw.readUInt8(o.touchpadButton),
-    batteryColorEnable: raw.readUInt8(o.batteryColorEnable) !== 0
+    batteryColorEnable: raw.readUInt8(o.batteryColorEnable) !== 0,
+    wakeEnable: raw.readUInt8(o.wakeEnable) !== 0,
+    autoHapticsMuteReplace: raw.readUInt8(o.autoHapticsMuteReplace) !== 0,
+    autoHapticsMuteMix: raw.readUInt8(o.autoHapticsMuteMix) !== 0,
+    enableUsbSn: raw.readUInt8(o.enableUsbSn) !== 0,
+    psShortcutEnabled: raw.readUInt8(o.psShortcutEnabled) !== 0,
+    disableMic: raw.readUInt8(o.disableMic) !== 0,
+    disableSpeaker: raw.readUInt8(o.disableSpeaker) !== 0,
+    enableWake: raw.readUInt8(o.enableWake) !== 0,
+    triggerReduce: raw.readUInt8(o.triggerReduce)
   };
   return cfg;
 }
@@ -118,9 +309,10 @@ function packConfig(cfg) {
   const buf = Buffer.alloc(CONFIG_SIZE);
   const o = FIELD_OFFSETS;
   buf.writeFloatLE(cfg.hapticsGain, o.hapticsGain);
-  buf.writeFloatLE(cfg.speakerVolume, o.speakerVolume);
+  buf.writeUInt8(cfg.speakerVolume, o.speakerVolume);
+  buf.writeUInt8(cfg.headsetVolume, o.headsetVolume);
+  buf.writeUInt8(cfg.speakerGain, o.speakerGain);
   buf.writeUInt8(cfg.inactiveTime, o.inactiveTime);
-  buf.writeUInt8(cfg.disableInactiveDisconnect ? 1 : 0, o.disableInactiveDisconnect);
   buf.writeUInt8(cfg.disablePicoLed ? 1 : 0, o.disablePicoLed);
   buf.writeUInt8(cfg.pollingRateMode, o.pollingRateMode);
   buf.writeUInt8(cfg.audioBufferLength, o.audioBufferLength);
@@ -133,6 +325,15 @@ function packConfig(cfg) {
   buf.writeUInt8(cfg.poweroffButton, o.poweroffButton);
   buf.writeUInt8(cfg.touchpadButton, o.touchpadButton);
   buf.writeUInt8(cfg.batteryColorEnable ? 1 : 0, o.batteryColorEnable);
+  buf.writeUInt8(cfg.wakeEnable ? 1 : 0, o.wakeEnable);
+  buf.writeUInt8(cfg.autoHapticsMuteReplace ? 1 : 0, o.autoHapticsMuteReplace);
+  buf.writeUInt8(cfg.autoHapticsMuteMix ? 1 : 0, o.autoHapticsMuteMix);
+  buf.writeUInt8(cfg.enableUsbSn ? 1 : 0, o.enableUsbSn);
+  buf.writeUInt8(cfg.psShortcutEnabled ? 1 : 0, o.psShortcutEnabled);
+  buf.writeUInt8(cfg.disableMic ? 1 : 0, o.disableMic);
+  buf.writeUInt8(cfg.disableSpeaker ? 1 : 0, o.disableSpeaker);
+  buf.writeUInt8(cfg.enableWake ? 1 : 0, o.enableWake);
+  buf.writeUInt8(cfg.triggerReduce, o.triggerReduce);
   return buf;
 }
 class DS5HapticsDevice {
@@ -147,13 +348,21 @@ class DS5HapticsDevice {
     for (const [pid, label] of candidates) {
       const infos = HID.devices(SONY_VID, pid);
       if (infos.length === 0) continue;
-      const path2 = infos[0].path;
-      if (!path2) continue;
-      try {
-        this.device = new HID.HID(path2);
-        this._model = label;
-        return label;
-      } catch {
+      for (const info of infos) {
+        if (!info.path) continue;
+        let dev = null;
+        try {
+          dev = new HID.HID(info.path);
+          dev.getFeatureReport(REPORT_READ_CONFIG, 64);
+          this.device = dev;
+          this._model = label;
+          return label;
+        } catch {
+          try {
+            dev?.close();
+          } catch {
+          }
+        }
       }
     }
     throw new DS5DeviceError(
@@ -186,7 +395,7 @@ class DS5HapticsDevice {
   // --- Config read / write ---
   readConfig() {
     const dev = this.assertConnected();
-    const raw = dev.getFeatureReport(REPORT_READ_CONFIG, 1 + CONFIG_SIZE);
+    const raw = dev.getFeatureReport(REPORT_READ_CONFIG, 64);
     const body = Buffer.from(raw.slice(1, 1 + CONFIG_SIZE));
     return unpackConfig(body);
   }
@@ -332,7 +541,7 @@ function stopHotplugWatcher() {
     detachListener = null;
   }
 }
-function waitForReattach(timeoutMs = 5e3) {
+function waitForReattach(timeoutMs = 1e4) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       usbBus.off("attach", onAttach);
@@ -347,6 +556,143 @@ function waitForReattach(timeoutMs = 5e3) {
     usbBus.on("attach", onAttach);
   });
 }
+const TELEMETRY_ENDPOINT = "https://ds5-telemetry.arctis-asm.workers.dev/collect";
+const INSTALLATION_ID_SALT = "ds5dongle-autohaptics";
+function getConsent() {
+  const s = loadSettings();
+  if (s.telemetryConsent === true) return true;
+  if (s.telemetryConsent === false) return false;
+  return null;
+}
+function setConsent(value) {
+  const s = loadSettings();
+  s.telemetryConsent = value;
+  saveSettings(s);
+}
+function readRawMachineId() {
+  const plat = process.platform;
+  if (plat === "linux") {
+    for (const path2 of ["/etc/machine-id", "/var/lib/dbus/machine-id"]) {
+      try {
+        const raw = fs.readFileSync(path2, "utf8").trim();
+        if (raw) return raw;
+      } catch {
+      }
+    }
+    return null;
+  }
+  if (plat === "win32") {
+    try {
+      const out = child_process.execSync(
+        'reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid',
+        { timeout: 3e3, encoding: "utf8" }
+      );
+      const match = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/i);
+      if (match) return match[1];
+    } catch {
+    }
+    return null;
+  }
+  if (plat === "darwin") {
+    try {
+      const out = child_process.execSync("ioreg -rd1 -c IOPlatformExpertDevice", {
+        timeout: 3e3,
+        encoding: "utf8"
+      });
+      const match = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+      if (match) return match[1];
+    } catch {
+    }
+    return null;
+  }
+  return null;
+}
+function machineIdHash() {
+  const raw = readRawMachineId();
+  if (!raw) return null;
+  return crypto.createHash("sha256").update(`${INSTALLATION_ID_SALT}:${raw}`).digest("hex").slice(0, 32);
+}
+function getInstallationId() {
+  const hashed = machineIdHash();
+  if (hashed) return hashed;
+  const s = loadSettings();
+  if (s.telemetryInstallId) return s.telemetryInstallId;
+  const uuid = crypto.randomUUID();
+  s.telemetryInstallId = uuid;
+  saveSettings(s);
+  return uuid;
+}
+function getOsLabel() {
+  const plat = process.platform;
+  if (plat === "linux") {
+    try {
+      const lines = fs.readFileSync("/etc/os-release", "utf8").split("\n");
+      const fields = {};
+      for (const line of lines) {
+        const idx = line.indexOf("=");
+        if (idx === -1) continue;
+        const key = line.slice(0, idx).trim();
+        const val = line.slice(idx + 1).trim().replace(/^"|"$/g, "");
+        fields[key] = val;
+      }
+      if (fields["PRETTY_NAME"]) return fields["PRETTY_NAME"];
+      const name = fields["NAME"] ?? "";
+      const version = fields["VERSION"] ?? fields["VERSION_ID"] ?? "";
+      if (name && version) return `${name} ${version}`;
+      if (name) return name;
+    } catch {
+    }
+    return "Unknown Linux";
+  }
+  if (plat === "win32") {
+    const ver = os__namespace.version();
+    const build = os__namespace.release();
+    const buildNum = build.split(".").pop() ?? build;
+    if (ver) return `${ver} (${buildNum})`;
+    return `Windows (build ${buildNum})`;
+  }
+  if (plat === "darwin") {
+    return `macOS ${os__namespace.release()}`;
+  }
+  return `${process.platform} ${os__namespace.release()}`;
+}
+async function doSend(firmware) {
+  const payload = {
+    installation_id: getInstallationId(),
+    platform: process.platform,
+    os: getOsLabel(),
+    version: electron.app.getVersion(),
+    firmware: firmware || "Unknown"
+  };
+  const body = JSON.stringify(payload);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5e3);
+  try {
+    await fetch(TELEMETRY_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: controller.signal
+    });
+    const s = loadSettings();
+    s.telemetryLastSent = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    saveSettings(s);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+function maybeSend(opts = {}) {
+  if (getConsent() !== true) return;
+  if (TELEMETRY_ENDPOINT.includes("PLACEHOLDER")) return;
+  const s = loadSettings();
+  if (s.telemetryLastSent) {
+    const today = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+    if (s.telemetryLastSent >= today) return;
+  }
+  const firmware = opts.firmware ?? "Unknown";
+  doSend(firmware).catch(() => {
+  });
+}
 const batteryProvider = process.platform === "linux" ? new LinuxUpower() : new WindowsBattery();
 function registerHandlers() {
   electron.ipcMain.handle(IPC.DEVICE_CONNECT, () => {
@@ -356,6 +702,7 @@ function registerHandlers() {
       firmwareVersion = hapticsDongle.readFirmwareVersion();
     } catch {
     }
+    loopbackEngine.start();
     return { model, firmwareVersion };
   });
   electron.ipcMain.handle(IPC.DEVICE_DISCONNECT, () => {
@@ -385,9 +732,19 @@ function registerHandlers() {
     hapticsDongle.saveConfig();
     if (reconnect) {
       hapticsDongle.reconnectUsb();
-      await waitForReattach(5e3);
-      hapticsDongle.connect();
-      return hapticsDongle.readConfig();
+      try {
+        await waitForReattach(1e4);
+      } catch {
+      }
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          hapticsDongle.connect();
+          return hapticsDongle.readConfig();
+        } catch {
+          if (attempt === 4) throw new Error("Config saved, but USB did not come back — reconnect manually.");
+          await new Promise((r) => setTimeout(r, 1e3));
+        }
+      }
     }
     return cfg;
   });
@@ -398,6 +755,14 @@ function registerHandlers() {
   electron.ipcMain.handle(IPC.PRESETS_LOAD, (_e, name) => presetStore.load(name));
   electron.ipcMain.handle(IPC.PRESETS_SAVE, (_e, name, cfg) => presetStore.save(name, cfg));
   electron.ipcMain.handle(IPC.PRESETS_DELETE, (_e, name) => presetStore.delete(name));
+  electron.ipcMain.handle(IPC.APP_GET_VERSION, () => electron.app.getVersion());
+  electron.ipcMain.handle(IPC.SHELL_OPEN_URL, (_e, url) => {
+    if (/^https:\/\/github\.com\/loteran\/DS5Dongle(\/|$)/.test(url)) {
+      electron.shell.openExternal(url);
+    }
+  });
+  electron.ipcMain.handle(IPC.TELEMETRY_GET_CONSENT, () => getConsent());
+  electron.ipcMain.handle(IPC.TELEMETRY_SET_CONSENT, (_e, value) => setConsent(value));
 }
 const TELEMETRY_INTERVAL_MS = 3e4;
 function startTelemetryTimer(win) {
@@ -414,6 +779,9 @@ function startTelemetryTimer(win) {
   }, TELEMETRY_INTERVAL_MS);
 }
 function setupHotplugEvents(win) {
+  loopbackEngine.on("status", (payload) => {
+    if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.LOOPBACK_STATUS, payload);
+  });
   startHotplugWatcher((event) => {
     if (win.isDestroyed()) return;
     if (event === "attach") {
@@ -425,15 +793,21 @@ function setupHotplugEvents(win) {
         } catch {
         }
         win.webContents.send(IPC_EVENTS.DEVICE_CHANGED, { connected: true, model, firmwareVersion });
+        maybeSend({ firmware: firmwareVersion });
       } catch {
         win.webContents.send(IPC_EVENTS.DEVICE_CHANGED, { connected: false });
       }
+      loopbackEngine.start();
     } else {
       hapticsDongle.disconnect();
+      loopbackEngine.stop();
       win.webContents.send(IPC_EVENTS.DEVICE_CHANGED, { connected: false });
     }
   });
-  electron.app.on("quit", stopHotplugWatcher);
+  electron.app.on("quit", () => {
+    loopbackEngine.stop();
+    stopHotplugWatcher();
+  });
 }
 const DEFAULT_WIDTH = 780;
 const DEFAULT_HEIGHT = 900;
@@ -466,11 +840,26 @@ function createWindow() {
   }
   return win;
 }
-electron.app.whenReady().then(() => {
+async function askTelemetryConsent(win) {
+  if (getConsent() !== null) return;
+  const { response } = await electron.dialog.showMessageBox(win, {
+    type: "question",
+    title: "Anonymous usage statistics",
+    message: "Help improve DS5Dongle by sharing anonymous stats",
+    detail: 'If you agree, the app will send once a day:\n  • Your OS (e.g. "Ubuntu 24.04" or "Windows 11 Pro")\n  • App version and firmware version\n\nNo personal data, no IP address, no controller input.\nThe ID is an irreversible hash — it cannot be traced back to you.\n\nYou can change this at any time in Settings.',
+    buttons: ["Yes, help improve DS5Dongle", "No thanks"],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  });
+  setConsent(response === 0);
+}
+electron.app.whenReady().then(async () => {
   const win = createWindow();
   registerHandlers();
   startTelemetryTimer(win);
   setupHotplugEvents(win);
+  await askTelemetryConsent(win);
 });
 electron.app.on("window-all-closed", () => {
   if (process.platform !== "darwin") electron.app.quit();

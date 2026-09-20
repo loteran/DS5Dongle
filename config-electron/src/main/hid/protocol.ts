@@ -1,6 +1,5 @@
-// Pack/unpack between DS5Config and the 23-byte HID buffer.
-// Implements the same logic as hid_bridge.py pack/unpack, in TypeScript.
-// TODO: implement in step 2
+// Pack/unpack between DS5Config and the CONFIG_SIZE-byte HID buffer.
+// Layout must stay in sync with src/config.h's Config_body (see shared/protocol.ts).
 
 import type { DS5Config } from '../../shared/config';
 import { DEFAULTS } from '../../shared/config';
@@ -15,9 +14,10 @@ export function unpackConfig(raw: Buffer): DS5Config {
   const o = FIELD_OFFSETS;
   const cfg: DS5Config = {
     hapticsGain:               Math.min(2.0, Math.max(1.0, raw.readFloatLE(o.hapticsGain))),
-    speakerVolume:             Math.min(0, Math.max(-100, raw.readFloatLE(o.speakerVolume))),
+    speakerVolume:             raw.readUInt8(o.speakerVolume),
+    headsetVolume:             raw.readUInt8(o.headsetVolume),
+    speakerGain:               raw.readUInt8(o.speakerGain),
     inactiveTime:              raw.readUInt8(o.inactiveTime),
-    disableInactiveDisconnect: raw.readUInt8(o.disableInactiveDisconnect) !== 0,
     disablePicoLed:            raw.readUInt8(o.disablePicoLed) !== 0,
     pollingRateMode:           raw.readUInt8(o.pollingRateMode) as 0 | 1 | 2,
     audioBufferLength:         raw.readUInt8(o.audioBufferLength),
@@ -33,6 +33,12 @@ export function unpackConfig(raw: Buffer): DS5Config {
     wakeEnable:                raw.readUInt8(o.wakeEnable) !== 0,
     autoHapticsMuteReplace:    raw.readUInt8(o.autoHapticsMuteReplace) !== 0,
     autoHapticsMuteMix:        raw.readUInt8(o.autoHapticsMuteMix) !== 0,
+    enableUsbSn:               raw.readUInt8(o.enableUsbSn) !== 0,
+    psShortcutEnabled:         raw.readUInt8(o.psShortcutEnabled) !== 0,
+    disableMic:                raw.readUInt8(o.disableMic) !== 0,
+    disableSpeaker:            raw.readUInt8(o.disableSpeaker) !== 0,
+    enableWake:                raw.readUInt8(o.enableWake) !== 0,
+    triggerReduce:             raw.readUInt8(o.triggerReduce),
   };
 
   return cfg;
@@ -43,9 +49,10 @@ export function packConfig(cfg: DS5Config): Buffer {
   const o = FIELD_OFFSETS;
 
   buf.writeFloatLE(cfg.hapticsGain,           o.hapticsGain);
-  buf.writeFloatLE(cfg.speakerVolume,          o.speakerVolume);
+  buf.writeUInt8(cfg.speakerVolume,            o.speakerVolume);
+  buf.writeUInt8(cfg.headsetVolume,            o.headsetVolume);
+  buf.writeUInt8(cfg.speakerGain,              o.speakerGain);
   buf.writeUInt8(cfg.inactiveTime,             o.inactiveTime);
-  buf.writeUInt8(cfg.disableInactiveDisconnect ? 1 : 0, o.disableInactiveDisconnect);
   buf.writeUInt8(cfg.disablePicoLed ? 1 : 0,  o.disablePicoLed);
   buf.writeUInt8(cfg.pollingRateMode,          o.pollingRateMode);
   buf.writeUInt8(cfg.audioBufferLength,        o.audioBufferLength);
@@ -61,6 +68,12 @@ export function packConfig(cfg: DS5Config): Buffer {
   buf.writeUInt8(cfg.wakeEnable ? 1 : 0,              o.wakeEnable);
   buf.writeUInt8(cfg.autoHapticsMuteReplace ? 1 : 0,  o.autoHapticsMuteReplace);
   buf.writeUInt8(cfg.autoHapticsMuteMix ? 1 : 0,      o.autoHapticsMuteMix);
+  buf.writeUInt8(cfg.enableUsbSn ? 1 : 0,             o.enableUsbSn);
+  buf.writeUInt8(cfg.psShortcutEnabled ? 1 : 0,       o.psShortcutEnabled);
+  buf.writeUInt8(cfg.disableMic ? 1 : 0,              o.disableMic);
+  buf.writeUInt8(cfg.disableSpeaker ? 1 : 0,          o.disableSpeaker);
+  buf.writeUInt8(cfg.enableWake ? 1 : 0,              o.enableWake);
+  buf.writeUInt8(cfg.triggerReduce,                    o.triggerReduce);
 
   return buf;
 }
