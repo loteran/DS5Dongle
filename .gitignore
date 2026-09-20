@@ -1,4 +1,9 @@
 build
+# electron-builder's icon-source convention collides with the firmware
+# build/ ignore above (it isn't a build output dir despite the name) -- keep
+# the generated app icon tracked.
+!config-electron/build/
+!config-electron/build/**
 .deps
 .vscode
 .idea

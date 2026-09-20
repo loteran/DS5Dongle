@@ -16,6 +16,7 @@ electronLanguages:
 
 linux:
   category: Utility
+  icon: build/icon.png
   artifactName: "${name}-${version}.${ext}"
   target:
     - target: dir
@@ -33,6 +34,7 @@ extraResources:
 
 win:
   signAndEditExecutable: false
+  icon: build/icon.ico
   artifactName: "${name}-${version}.${ext}"
   target:
     - target: nsis

@@ -16,7 +16,11 @@ const IPC = {
   SHELL_OPEN_URL: "shell:openUrl",
   // Telemetry consent — renderer reads and writes via settings UI
   TELEMETRY_GET_CONSENT: "telemetry:getConsent",
-  TELEMETRY_SET_CONSENT: "telemetry:setConsent"
+  TELEMETRY_SET_CONSENT: "telemetry:setConsent",
+  // Loopback source selection (Windows-only)
+  LOOPBACK_LIST_DEVICES: "loopback:listDevices",
+  LOOPBACK_GET_SOURCE: "loopback:getSource",
+  LOOPBACK_SET_SOURCE: "loopback:setSource"
 };
 const IPC_EVENTS = {
   DEVICE_CHANGED: "device:changed",
@@ -62,5 +66,9 @@ electron.contextBridge.exposeInMainWorld("ds5", {
     electron.ipcRenderer.on(IPC_EVENTS.LOOPBACK_STATUS, listener);
     return () => electron.ipcRenderer.removeListener(IPC_EVENTS.LOOPBACK_STATUS, listener);
   },
+  // Loopback source selection (Windows-only)
+  listAudioSources: () => electron.ipcRenderer.invoke(IPC.LOOPBACK_LIST_DEVICES),
+  getAudioSource: () => electron.ipcRenderer.invoke(IPC.LOOPBACK_GET_SOURCE),
+  setAudioSource: (name) => electron.ipcRenderer.invoke(IPC.LOOPBACK_SET_SOURCE, name),
   platform: process.platform
 });

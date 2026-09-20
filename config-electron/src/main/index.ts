@@ -20,6 +20,10 @@ function createWindow(): BrowserWindow {
     minWidth:  MIN_WIDTH,
     minHeight: MIN_HEIGHT,
     title:     'DS5 Audio Haptics BT',
+    // Packaged builds get their icon from electron-builder.yml (build/icon.*);
+    // this covers the dev-mode/Linux runtime window icon, which that config
+    // doesn't touch.
+    icon:      join(__dirname, '../../build/icon.png'),
     webPreferences: {
       preload:          join(__dirname, '../preload/index.js'),
       contextIsolation: true,
