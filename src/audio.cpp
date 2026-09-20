@@ -37,9 +37,6 @@
 using std::clamp;
 using std::max;
 
-// Haptics 48 kHz -> 3 kHz resampler. Now core1-only (see haptics_proc()); core0
-// never touches it, so it needs no cross-core protection.
-static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
@@ -280,10 +277,6 @@ void __not_in_flash_func(audio_loop)() {
 }
 
 void audio_init() {
-    resampler.SetMode(true, 0, false);
-    resampler.SetRates(48000, 3000);
-    resampler.SetFeedMode(true);
-    resampler.Prealloc(2, 24, 6);
     // Mic and haptics queues are read from audio_loop on core0 every
     // iteration, so they must exist regardless of the speaker-proc build flag.
     queue_init(&mic_fifo, sizeof(mic_element), 2);
@@ -384,9 +377,6 @@ static void __not_in_flash_func(haptics_proc)() {
     const int frames = elem.frames;
     const int actual_ch = elem.actual_ch;
 
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
-
     const uint8_t auto_mode  = get_config().auto_haptics_enable;
     const float haptics_gain = get_config().haptics_gain;
     // For 2ch mode (Windows/Stereo Mix), always enable auto-haptics DSP regardless of auto_mode setting
@@ -403,7 +393,15 @@ static void __not_in_flash_func(haptics_proc)() {
     constexpr float ENV_ATK = 0.40f;
     constexpr float ENV_REL = 0.025f;
 
-    for (int i = 0; i < nframes; i++) {
+    static int8_t haptic_buf[SAMPLE_SIZE];
+    static int haptic_buf_pos = 0;
+    // 48kHz -> 3kHz is a fixed 16:1 ratio. Emitting every 16th sample directly
+    // instead of running the block through WDL_Resampler's polyphase filter
+    // removes the single most expensive step here. The haptics channel is
+    // felt, not heard, so resampler interpolation quality buys nothing.
+    static uint8_t haptic_phase = 0;
+
+    for (int i = 0; i < frames; i++) {
         // 4ch mode (Linux): use dedicated haptic channels ch2/ch3
         // 2ch mode (Windows): no dedicated haptic channels, DSP will derive from ch0/ch1 below
         float h_l = (actual_ch == 4) ? raw[i * 4 + 2] / 32768.0f * haptics_gain : 0.0f;
@@ -448,20 +446,15 @@ static void __not_in_flash_func(haptics_proc)() {
             }
         }
 
-        in_buf[i * 2]     = static_cast<WDL_ResampleSample>(clamp(h_l, -1.0f, 1.0f));
-        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(h_r, -1.0f, 1.0f));
-    }
+        // Emit only every 16th sample (48kHz -> 3kHz), directly as int8 -- no
+        // resampler involved. See the note above the loop for why.
+        if (++haptic_phase < 16) {
+            continue;
+        }
+        haptic_phase = 0;
 
-    // 48kHz -> 3kHz 重采样
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32帧 × 2ch
-    const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
-
-    static int8_t haptic_buf[SAMPLE_SIZE];
-    static int haptic_buf_pos = 0;
-
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = static_cast<int>(out_buf[i * 2] * 127.0f);
-        int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
+        int val_l = static_cast<int>(clamp(h_l, -1.0f, 1.0f) * 127.0f);
+        int val_r = static_cast<int>(clamp(h_r, -1.0f, 1.0f) * 127.0f);
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127);
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
 
